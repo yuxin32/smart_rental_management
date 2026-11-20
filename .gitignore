@@ -39,6 +39,7 @@ migrate_working_dir/
 !.env.example
 /android/local.properties
 /android/key.properties
+/android/build/
 *.jks
 *.keystore
 *.p12
