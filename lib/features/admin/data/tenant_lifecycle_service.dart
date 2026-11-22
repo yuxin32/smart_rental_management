@@ -8,7 +8,7 @@ class TenantRegistrationRecord {
     required this.fullName,
     required this.icNumber,
     required this.email,
-    required this.phone,
+    required this.contact_number,
     required this.verificationStatus,
     required this.registrationStatus,
     required this.unitId,
@@ -31,7 +31,7 @@ class TenantRegistrationRecord {
   final String fullName;
   final String icNumber;
   final String email;
-  final String? phone;
+  final String? contact_number;
   final String verificationStatus;
   final String registrationStatus;
   final String? unitId;
@@ -138,7 +138,7 @@ class TenantRegistrationRecord {
       fullName: map['full_name'] as String? ?? '',
       icNumber: map['ic_number'] as String? ?? '',
       email: map['email'] as String? ?? '',
-      phone: map['phone'] as String?,
+      contact_number: map['contact_number'] as String?,
       verificationStatus: map['verification_status'] as String? ?? 'pending',
       registrationStatus: map['registration_status'] as String? ?? 'draft',
       unitId: map['unit_id'] as String?,
@@ -351,7 +351,7 @@ abstract final class TenantLifecycleService {
     required String fullName,
     required String icNumber,
     required String email,
-    String? phone,
+    String? contact_number,
   }) async {
     final adminId = _client.auth.currentUser?.id;
     if (adminId == null) throw StateError('Administrator session is missing.');
@@ -362,7 +362,7 @@ abstract final class TenantLifecycleService {
           'full_name': fullName,
           'ic_number': icNumber,
           'email': email,
-          'phone': phone,
+          'contact_number': contact_number,
           'verification_status': 'pending',
           'registration_status': 'draft',
           'created_by_admin_id': adminId,
@@ -480,7 +480,7 @@ abstract final class TenantLifecycleService {
 
     final account = await _client
         .from('user_account')
-        .select('full_name, email, phone')
+        .select('full_name, email, contact_number')
         .eq('user_id', userId)
         .maybeSingle();
 
@@ -501,7 +501,7 @@ abstract final class TenantLifecycleService {
       return TenantRentalDetails(
         fullName: account['full_name'] as String? ?? '',
         email: account['email'] as String? ?? '',
-        phone: account['phone'] as String?,
+        contact_number: account['contact_number'] as String?,
         unitNumber: 'Not assigned',
         unitLocation: null,
         tenancyStatus: 'unassigned',
@@ -519,7 +519,7 @@ abstract final class TenantLifecycleService {
     return TenantRentalDetails(
       fullName: account['full_name'] as String? ?? '',
       email: account['email'] as String? ?? '',
-      phone: account['phone'] as String?,
+      contact_number: account['contact_number'] as String?,
       unitNumber: unit['unit_number'] as String? ?? 'Not assigned',
       unitLocation: unit['block_and_floor'] as String?,
       tenancyStatus: tenancy['tenancy_status'] as String? ?? 'pending',
@@ -547,7 +547,7 @@ class TenantRentalDetails {
   const TenantRentalDetails({
     required this.fullName,
     required this.email,
-    required this.phone,
+    required this.contact_number,
     required this.unitNumber,
     required this.unitLocation,
     required this.tenancyStatus,
@@ -559,7 +559,7 @@ class TenantRentalDetails {
 
   final String fullName;
   final String email;
-  final String? phone;
+  final String? contact_number;
   final String unitNumber;
   final String? unitLocation;
   final String tenancyStatus;

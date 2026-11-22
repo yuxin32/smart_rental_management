@@ -4,13 +4,13 @@ abstract final class SupabaseConfig {
   // key here.
   static const url = String.fromEnvironment(
     'SUPABASE_URL',
-    defaultValue: 'https://gwznscgganxegcpcpulm.supabase.co',
+    defaultValue: 'https://myetpfavvwuevdcybdes.supabase.co',
   );
   static const publishableKey = String.fromEnvironment(
     'SUPABASE_PUBLISHABLE_KEY',
     defaultValue: String.fromEnvironment(
       'SUPABASE_ANON_KEY',
-      defaultValue: 'sb_publishable_sZzbXrEeC5yCRaAJRFVvuQ_wXZKygMb',
+      defaultValue: 'sb_publishable_a4A_3sqJNSf69ggxM_rJEg_io66r19d',
     ),
   );
 }

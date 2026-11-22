@@ -1,5 +1,5 @@
+import '../config/integrated_backend.dart';
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// A persistent sign-out action used by both role workspaces.
 ///
@@ -28,7 +28,7 @@ class _AppLogoutButtonState extends State<AppLogoutButton> {
     setState(() => _signingOut = true);
 
     try {
-      await Supabase.instance.client.auth.signOut();
+      await IntegratedBackend.instance.auth.signOut();
       if (!mounted) return;
       Navigator.of(context).pushNamedAndRemoveUntil('/login', (_) => false);
     } catch (_) {

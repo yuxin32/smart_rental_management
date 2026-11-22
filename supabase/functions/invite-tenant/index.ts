@@ -199,7 +199,7 @@ Deno.serve(async (request) => {
 
   const inviteOptions = {
     data: {
-      account_type: "tenant",
+      role: "tenant",
       registration_id: registration.registration_id,
     },
   };
@@ -245,8 +245,8 @@ Deno.serve(async (request) => {
         user_id: invitedUser.id,
         full_name: registration.full_name,
         email: registration.email,
-        phone: registration.phone,
-        account_type: "tenant",
+        contact_number: registration.contact_number,
+        role: "tenant",
         account_status: "pending",
         invitation_status: "invited",
         invited_at: invitedAt,

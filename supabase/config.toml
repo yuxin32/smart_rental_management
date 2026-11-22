@@ -1,0 +1,10 @@
+project_id = "SmartRental_Integrated"
+[db.seed]
+enabled = false
+[functions.invite-tenant]
+verify_jwt = false
+[functions.ingest-meter-reading]
+verify_jwt = false
+
+[functions.evidence-validate]
+verify_jwt = false

@@ -493,7 +493,7 @@ class _PersonalDetailsCard extends StatelessWidget {
           _DetailRow(label: 'Full name', value: record.fullName),
           _DetailRow(label: 'IC number', value: record.icNumber),
           _DetailRow(label: 'Email', value: record.email),
-          _DetailRow(label: 'Phone', value: record.phone ?? 'Not provided'),
+          _DetailRow(label: 'Phone', value: record.contact_number ?? 'Not provided'),
         ],
       ),
     );

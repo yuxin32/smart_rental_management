@@ -1,0 +1,53 @@
+create schema if not exists supabase_migrations;
+create table if not exists supabase_migrations.schema_migrations(version text primary key, statements text[], name text);
+insert into supabase_migrations.schema_migrations(version,name) values
+('20261123000001','tenant_initial_schema'),
+('20261123000002','tenant_tenant_account_lifecycle'),
+('20261123000003','tenant_tenant_onboarding_audit'),
+('20261123000004','tenant_tenant_verification_documents'),
+('20261123000005','tenant_live_chat_and_testing_access'),
+('20261123000006','tenant_database_announcements'),
+('20261123000007','tenant_edit_draft_announcements'),
+('20261123000008','tenant_hide_pre_activation_announcements'),
+('20261123000009','tenant_simulated_electricity_device_registration'),
+('20261123000010','tenant_meter_ingestion_evidence'),
+('20261123000011','tenant_electricity_reading_realtime'),
+('20261123000012','tenant_maintenance_workflow_storage_and_status_rpc'),
+('20261123000013','tenant_simplify_maintenance_statuses'),
+('20261123000014','owner_core_booking'),
+('20261123000015','owner_lifecycle_evidence_realtime'),
+('20261123000016','owner_cancel_before_start'),
+('20261123000017','owner_provider_setup'),
+('20261123000018','owner_provider_data_visibility'),
+('20261123000019','owner_secure_booking_creation'),
+('20261123000020','owner_property_window_lock_visibility'),
+('20261123000021','owner_eligible_provider_search'),
+('20261123000022','owner_booking_quote_snapshot'),
+('20261123000023','owner_booking_messages'),
+('20261123000024','owner_booking_reviews'),
+('20261123000025','owner_booking_contexts'),
+('20261123000026','owner_deployment_environment'),
+('20261123000027','owner_evidence_upload_lifecycle'),
+('20261123000028','owner_cursor_pagination'),
+('20261123000029','owner_test_data_management'),
+('20261123000030','owner_booking_communication_limits'),
+('20261123000031','owner_verified_evidence'),
+('20261123000032','owner_explicit_app_privileges'),
+('20261123000033','owner_provider_earnings'),
+('20261123000034','owner_provider_profile_editor'),
+('20261123000035','owner_booking_notifications'),
+('20261123000036','owner_conversation_inbox'),
+('20261123000037','owner_owner_workspace'),
+('20261123000038','owner_workspace_reports'),
+('20261123000039','owner_test_fixture_cleanup'),
+('20261123000040','owner_message_read_receipts'),
+('20261123000041','owner_owner_uat_identity_portfolio'),
+('20261123000042','owner_owner_navigation_pages'),
+('20261123000043','owner_evidence_photo_removal'),
+('20261123000044','integrated_identity_and_units'),
+('20261123000045','record_integrated_migration_history')
+on conflict(version) do nothing;
+
+alter table supabase_migrations.schema_migrations enable row level security;
+revoke all on schema supabase_migrations from public,anon,authenticated;
+revoke all on supabase_migrations.schema_migrations from public,anon,authenticated;

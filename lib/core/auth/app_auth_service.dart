@@ -1,6 +1,6 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-enum AppAccountType { tenant, admin, unknown }
+enum AppAccountType { tenant, admin, owner, provider, unknown }
 
 class AppAuthProfile {
   const AppAuthProfile({
@@ -32,15 +32,17 @@ abstract final class AppAuthService {
 
     final record = await _client
         .from('user_account')
-        .select('account_type, account_status, invitation_status')
+        .select('role, account_status, invitation_status')
         .eq('user_id', user.id)
         .maybeSingle();
 
     if (record == null) return null;
 
-    final accountType = switch (record['account_type'] as String?) {
+    final accountType = switch (record['role'] as String?) {
       'tenant' => AppAccountType.tenant,
       'admin' => AppAccountType.admin,
+      'owner' => AppAccountType.owner,
+      'provider' => AppAccountType.provider,
       _ => AppAccountType.unknown,
     };
 

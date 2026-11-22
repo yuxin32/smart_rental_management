@@ -1,17 +1,13 @@
-# smart_rental_management
+# Smart Rental Management — Integrated
 
-A new Flutter project.
+Flutter application combining Tenant, Administrator, Property Owner and Cleaning Service Provider modules.
 
-## Getting Started
+Open this folder (the folder containing `pubspec.yaml`) in Android Studio. Run `lib/main.dart` on an Android emulator.
 
-This project is a starting point for a Flutter application.
+The app connects to the integrated Supabase project `myetpfavvwuevdcybdes`. Its publishable client key is configured in `lib/core/config/supabase_config.dart`; server secret keys are never included in the app.
 
-A few resources to get you started if this is your first Flutter project:
+See [integration notes](docs/INTEGRATION.md) for schema decisions, first administrator setup, source revisions, verification and remaining deployment requirements.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+The schema was installed on a new project. No old accounts or business records were migrated. Old login credentials therefore cannot sign into this project.
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+Backend migrations are exclusively for this integrated environment. Do not apply them to either original Supabase project.

@@ -126,11 +126,11 @@ abstract final class TenantElectricityService {
         .from('electricity_reading')
         .stream(primaryKey: ['reading_id'])
         .eq('device_id', deviceId)
-        .eq('validation_status', 'accepted')
         .order('measurement_timestamp', ascending: false)
         .limit(limit)
         .map((rows) {
           final readings = rows
+              .where((row) => row['validation_status'] == 'accepted')
               .map(
                 (row) => TenantElectricityReading.fromMap(
                   Map<String, dynamic>.from(row),

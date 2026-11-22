@@ -1,12 +1,11 @@
+import 'dart:convert';
+import '../../../../core/config/integrated_backend.dart';
+import '../../../../core/auth/app_auth_gate.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/auth/app_auth_service.dart';
 import '../../../../core/theme/app_theme.dart';
-import '../../../admin/presentation/pages/admin_module_shell.dart';
-import '../../../tenant/presentation/pages/tenant_module_shell.dart';
-import 'tenant_set_password_page.dart';
-import 'tenant_verification_page.dart';
 
 class RoleLoginPage extends StatefulWidget {
   const RoleLoginPage({
@@ -58,6 +57,7 @@ class _RoleLoginPageState extends State<RoleLoginPage> {
 
     setState(() => _isSigningIn = true);
     try {
+      await IntegratedBackend.instance.authStorage?.prepareForAuthentication();
       final response = await Supabase.instance.client.auth.signInWithPassword(
         email: email,
         password: password,
@@ -101,6 +101,7 @@ class _RoleLoginPageState extends State<RoleLoginPage> {
         return;
       }
 
+      await IntegratedBackend.instance.authStorage?.persistSession(jsonEncode(response.session!.toJson()));
       _openModule(profile);
     } on AuthException catch (error) {
       if (mounted) _showMessage(error.message);
@@ -112,21 +113,8 @@ class _RoleLoginPageState extends State<RoleLoginPage> {
   }
 
   void _openModule(AppAuthProfile profile) {
-    final Widget page;
-    if (widget.expectedRole == AppAccountType.admin) {
-      page = const AdminModuleShell();
-    } else if (profile.accountStatus == 'pending' &&
-        profile.invitationStatus == 'invited') {
-      page = const TenantSetPasswordPage();
-    } else if (profile.accountStatus == 'pending' &&
-        profile.invitationStatus == 'accepted') {
-      page = const TenantVerificationPage();
-    } else {
-      page = const TenantModuleShell();
-    }
-
     Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (_) => page),
+      MaterialPageRoute(builder: (_) => const AppAuthGate()),
       (route) => false,
     );
   }

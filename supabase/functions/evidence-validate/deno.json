@@ -1,0 +1,4 @@
+{
+  "imports": { "jpeg-js": "npm:jpeg-js@0.4.4", "pngjs": "npm:pngjs@7.0.0" },
+  "nodeModulesDir": "auto"
+}

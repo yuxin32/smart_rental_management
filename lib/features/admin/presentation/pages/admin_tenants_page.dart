@@ -405,7 +405,7 @@ class _AdminAddTenantPageState extends State<AdminAddTenantPage> {
             fullName: _fullNameController.text.trim(),
             icNumber: _icController.text.trim(),
             email: _emailController.text.trim(),
-            phone: _phoneController.text.trim().isEmpty
+            contact_number: _phoneController.text.trim().isEmpty
                 ? null
                 : _phoneController.text.trim(),
           );
@@ -1069,7 +1069,7 @@ class _AdminTenantDetailsPageState extends State<AdminTenantDetailsPage> {
                 ),
                 _DetailLine(
                   label: 'Phone number',
-                  value: _record.phone ?? 'Not provided',
+                  value: _record.contact_number ?? 'Not provided',
                   icon: Icons.phone_outlined,
                   last: true,
                 ),

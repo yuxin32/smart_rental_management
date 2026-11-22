@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../../../../core/theme/app_theme.dart';
 import 'admin_login_page.dart';
 import 'tenant_login_page.dart';
+import '../../../../core/config/integrated_backend.dart';
+import '../../../../owner_provider/main.dart' as cleaning;
 
 /// Entry screen for choosing the correct role-specific login interface.
 class LoginPage extends StatelessWidget {
@@ -117,6 +119,16 @@ class LoginPage extends StatelessWidget {
                             builder: (_) => const AdminLoginPage(),
                           ),
                         ),
+                      ),
+                      const SizedBox(height: 14),
+                      _RoleLoginCard(
+                        icon: Icons.cleaning_services_outlined,
+                        title: 'Owner & Cleaning Provider',
+                        description: 'Properties, cleaning bookings, schedules, and communication.',
+                        accentColor: const Color(0xFF238A83),
+                        onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                          builder: (_) => cleaning.RentalAppDemo(backend: IntegratedBackend.instance),
+                        )),
                       ),
                       const SizedBox(height: 20),
                       Container(

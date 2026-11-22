@@ -9,6 +9,8 @@ import '../../features/auth/presentation/pages/tenant_set_password_page.dart';
 import '../../features/auth/presentation/pages/tenant_verification_page.dart';
 import '../../features/tenant/presentation/pages/tenant_module_shell.dart';
 import 'app_auth_service.dart';
+import '../config/integrated_backend.dart';
+import '../../owner_provider/main.dart' as cleaning;
 
 class AppAuthGate extends StatefulWidget {
   const AppAuthGate({super.key});
@@ -47,7 +49,12 @@ class _AppAuthGateState extends State<AppAuthGate> {
 
   Future<AppAuthProfile?> _resolveProfile() async {
     try {
-      final profile = await AppAuthService.loadCurrentProfile();
+      var profile = await AppAuthService.loadCurrentProfile();
+      final user = IntegratedBackend.instance.client.auth.currentUser;
+      if (profile == null && ['owner', 'provider'].contains(user?.userMetadata?['requested_role'])) {
+        await IntegratedBackend.instance.auth.currentIdentity();
+        profile = await AppAuthService.loadCurrentProfile();
+      }
       final isPendingTenantAccount =
           profile?.accountType == AppAccountType.tenant &&
           profile?.accountStatus == 'pending' &&
@@ -85,6 +92,10 @@ class _AppAuthGateState extends State<AppAuthGate> {
         }
 
         final profile = snapshot.data;
+        if (profile?.accountType == AppAccountType.owner ||
+            profile?.accountType == AppAccountType.provider) {
+          return cleaning.RentalAppDemo(backend: IntegratedBackend.instance);
+        }
         if (profile?.accountType == AppAccountType.admin) {
           return const AdminModuleShell();
         }
