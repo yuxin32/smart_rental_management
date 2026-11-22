@@ -55,3 +55,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Private migration backups and credentials
+/migration-private/
+/supabase/private/
+**/transfer-credentials.json
