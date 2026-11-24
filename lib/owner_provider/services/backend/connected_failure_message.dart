@@ -41,6 +41,10 @@ abstract final class ConnectedFailureMessage {
   }
 
   static String forBookingReason(String reason) => switch (reason) {
+        'rental_location_missing' =>
+          'Set or confirm this rental unit’s service area, then find providers again.',
+        'provider_area' =>
+          'This provider no longer covers your rental unit’s area. Search again for providers who cover it.',
         'price_changed' =>
           'The quoted price changed. Search again to review the new amount.',
         'slot_conflict' ||
@@ -61,6 +65,12 @@ abstract final class ConnectedFailureMessage {
       };
 
   static String forAcceptanceReason(String? reason) => switch (reason) {
+        'rental_location_missing' =>
+          'The Owner needs to confirm the rental unit’s location before this request can be accepted.',
+        'provider_area' =>
+          'Your selected service coverage does not include this rental unit. Review your service areas before accepting.',
+        'request_expired' =>
+          'The scheduled start time has passed. This request can no longer be accepted. The Owner needs to reschedule or cancel it.',
         'slot_conflict' ||
         'availability' =>
           'This time is no longer available. The request remains Pending; ask the Owner to choose another time.',

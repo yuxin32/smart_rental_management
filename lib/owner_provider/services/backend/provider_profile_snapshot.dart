@@ -135,12 +135,16 @@ class ProviderProfileDraft {
       required this.daily,
       required this.avatar,
       required this.sharePhone,
-      required this.services});
+      required this.services,
+      this.coverageAreaIds = const {},
+      this.originPinLink = ''});
   final String name, bio, phone, area, origin;
   final double? hourly, daily;
   final int avatar;
   final bool sharePhone;
   final Set<String> services;
+  final Set<String> coverageAreaIds;
+  final String originPinLink;
   Map<String, dynamic> get json => {
         'full_name': name.trim(),
         'bio': bio.trim(),

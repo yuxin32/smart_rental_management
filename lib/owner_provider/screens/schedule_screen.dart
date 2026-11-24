@@ -400,7 +400,7 @@ class ScheduleConnectionStatus extends StatelessWidget {
             if (binding.loading || binding.loadingMore)
               const LinearProgressIndicator(minHeight: 2),
             Text(
-              message,
+              binding.monthView ? message.replaceAll('week', 'month') : message,
               style: TextStyle(
                 color: SemanticColors.of(context).textPrimary,
                 fontSize: 12,

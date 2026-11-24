@@ -12,6 +12,7 @@ import '../widgets/connected_action_feedback.dart';
 import '../services/backend/cursor_feed.dart';
 import '../widgets/connected_paged_list.dart';
 import '../widgets/connected_route_lifecycle.dart';
+import '../widgets/workspace_actions.dart';
 import 'connected_property_form_screen.dart';
 import 'connected_booking_request_screen.dart';
 import 'connected_provider_setup_screen.dart';
@@ -146,15 +147,14 @@ class _ConnectedWorkspaceScreenState extends State<ConnectedWorkspaceScreen>
     final provider = widget.backend.provider;
     await Navigator.of(context).push<void>(
       MaterialPageRoute(
-        builder: (_) => ConnectedProviderSetupScreen(
+        builder: (c) => ConnectedProviderSetupScreen(
+          bottomNavigationBar: WorkspaceActions(widget.backend, widget.role)
+              .providerNavigation(c, 'profile', allowActiveNavigation: true),
+          loadWeeklyHours: provider.weeklyState,
+          saveWeeklyHours: provider.replaceWeeklyHours,
+          loadDayOffConstraints: provider.dayOffConstraints,
           load: provider.loadSetup,
           saveServices: provider.replaceCapabilities,
-          addSlot: (weekday, start, end) => provider.addWeeklySlot(
-            weekday: weekday,
-            startTime: start,
-            endTime: end,
-          ),
-          removeSlot: provider.removeWeeklySlot,
           addUnavailableDate: provider.addUnavailableDate,
           removeUnavailableDate: provider.removeUnavailableDate,
         ),
@@ -171,6 +171,9 @@ class _ConnectedWorkspaceScreenState extends State<ConnectedWorkspaceScreen>
           loadProperties: owner.properties,
           loadServiceTypes: owner.serviceTypes,
           findEligible: owner.eligibleProviders,
+          findMatches: owner.findMatches,
+          loadServiceAreas: owner.locations.areas,
+          savePropertyLocation: owner.savePropertyLocation,
           createPending: widget.backend.bookings.createPending,
           findCreatedBooking: widget.backend.bookings.createdBookingIdForToken,
         ),

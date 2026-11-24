@@ -381,6 +381,8 @@ class DemoProperty {
       required this.bedrooms,
       required this.sizeSqft,
       this.address = '',
+      this.locationAreaId,
+      this.locationPinLink = '',
       this.cleaningWindowStart = const TimeOfDay(hour: 8, minute: 0),
       this.cleaningWindowEnd = const TimeOfDay(hour: 18, minute: 0)});
   final String id;
@@ -389,6 +391,8 @@ class DemoProperty {
   final int bedrooms;
   final int sizeSqft;
   final String address;
+  final String? locationAreaId;
+  final String locationPinLink;
   // Local preview fixture until rental-unit availability is persisted.
   final TimeOfDay cleaningWindowStart;
   final TimeOfDay cleaningWindowEnd;
@@ -410,6 +414,8 @@ class DemoProperty {
         bedrooms: bedrooms ?? this.bedrooms,
         sizeSqft: sizeSqft ?? this.sizeSqft,
         address: address ?? this.address,
+        locationAreaId: locationAreaId,
+        locationPinLink: locationPinLink,
         cleaningWindowStart: cleaningWindowStart ?? this.cleaningWindowStart,
         cleaningWindowEnd: cleaningWindowEnd ?? this.cleaningWindowEnd,
       );

@@ -1,7 +1,7 @@
 # Integrated Smart Rental Management
 
 Source: yuxin32/smart_rental_management at eb0dee3; wanting0024/smart-rental-management at b812322.
-The start/evidence/completion flow has subsequently been ported from Owner/Provider checkpoint 975f201 on the integration branch. See [CLEANING_CHECKPOINT_UPGRADE.md](CLEANING_CHECKPOINT_UPGRADE.md) for behaviour, local verification and the required 046-to-048 upgrade; hosted deployment remains pending.
+The latest approved Owner/Provider functionality has subsequently been ported from checkpoint 975f201 on the integration branch. See [CLEANING_CHECKPOINT_UPGRADE.md](CLEANING_CHECKPOINT_UPGRADE.md) for the 046-to-048 start/evidence gates and [OWNER_PROVIDER_LATEST_UPGRADE.md](OWNER_PROVIDER_LATEST_UPGRADE.md) for the 048-to-052 matching/availability/UI upgrade; hosted deployment remains pending.
 Target backend: myetpfavvwuevdcybdes. The schemas were installed first, followed by the authorized migration of both source projects' existing test data. See DATA_MIGRATION.md.
 
 ## Shared schema

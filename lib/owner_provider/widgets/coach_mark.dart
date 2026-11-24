@@ -14,6 +14,7 @@ class CoachMark {
     required this.icon,
     required this.accent,
     this.alignment = CoachMarkAlignment.center,
+    this.targetKey,
   });
   final String id;
   final String title;
@@ -21,9 +22,17 @@ class CoachMark {
   final IconData icon;
   final Color accent;
   final CoachMarkAlignment alignment;
+  final GlobalKey? targetKey;
 }
 
-enum CoachMarkAlignment { topLeft, topRight, center, bottomCenter, bottomLeft, bottomRight }
+enum CoachMarkAlignment {
+  topLeft,
+  topRight,
+  center,
+  bottomCenter,
+  bottomLeft,
+  bottomRight
+}
 
 /// Persists 'seen' state for each coach-mark set by id.
 class CoachMarkService {
@@ -36,7 +45,9 @@ class CoachMarkService {
 
   static Future<void> markSeen(String setId) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('$_kPrefix$setId', true);
+    if (!await prefs.setBool('$_kPrefix$setId', true)) {
+      throw StateError('Guidance preference was not saved.');
+    }
   }
 
   static Future<void> reset(String setId) async {
@@ -66,174 +77,369 @@ class CoachMarkOverlay extends StatefulWidget {
 }
 
 class _CoachMarkOverlayState extends State<CoachMarkOverlay> {
-  bool _show = false;
-  int _idx = 0;
-  bool _loading = true;
+  RawDialogRoute<bool>? _route;
+  int _generation = 0;
 
   @override
   void initState() {
     super.initState();
-    _init();
+    _check();
   }
 
-  Future<void> _init() async {
-    final seen = await CoachMarkService.hasSeen(widget.setId);
-    if (mounted) {
-      setState(() {
-        _show = !seen && widget.marks.isNotEmpty;
-        _loading = false;
-      });
+  @override
+  void didUpdateWidget(covariant CoachMarkOverlay oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.setId != widget.setId ||
+        (oldWidget.marks.isEmpty && widget.marks.isNotEmpty)) {
+      _removeRoute();
+      _check();
     }
   }
 
-  void _next() {
-    if (_idx < widget.marks.length - 1) {
-      setState(() => _idx++);
-    } else {
-      _dismiss();
+  Future<void> _check() async {
+    final generation = ++_generation, setId = widget.setId;
+    if (widget.marks.isEmpty) return;
+    var seen = false;
+    try {
+      seen = await CoachMarkService.hasSeen(setId);
+    } catch (_) {/* Allow a fresh guide. */}
+    if (!mounted || generation != _generation || seen) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          generation != _generation ||
+          _route != null ||
+          ModalRoute.of(context)?.isCurrent == false) return;
+      _open(setId, List<CoachMark>.unmodifiable(widget.marks));
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  Future<void> _open(String setId, List<CoachMark> marks) async {
+    final route = RawDialogRoute<bool>(
+      settings: const RouteSettings(name: 'page-guidance'),
+      barrierDismissible: false,
+      barrierColor: Colors.transparent,
+      barrierLabel: 'Page guidance',
+      traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
+      pageBuilder: (_, __, ___) => _PageGuidance(marks: marks),
+    );
+    _route = route;
+    final completed =
+        await Navigator.of(context, rootNavigator: true).push(route);
+    if (identical(_route, route)) _route = null;
+    if (completed == true) {
+      try {
+        await CoachMarkService.markSeen(setId);
+      } catch (_) {
+        // Explicit dismissal still works; a failed save may show the guide again.
+      }
     }
   }
 
-  void _dismiss() {
-    CoachMarkService.markSeen(widget.setId);
+  void _removeRoute() {
+    final route = _route;
+    _route = null;
+    if (route == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final navigator = route.navigator;
+      if (navigator != null && navigator.mounted && route.isActive) {
+        navigator.removeRoute(route);
+      }
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  @override
+  void dispose() {
+    ++_generation;
+    _removeRoute();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
+class _PageGuidance extends StatefulWidget {
+  const _PageGuidance({required this.marks});
+  final List<CoachMark> marks;
+  @override
+  State<_PageGuidance> createState() => _PageGuidanceState();
+}
+
+class _PageGuidanceState extends State<_PageGuidance> {
+  final _pageKey = GlobalKey();
+  int _index = 0;
+  bool _moving = true, _measureQueued = false;
+  Rect? _target;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reveal());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _queueMeasure();
+  }
+
+  void _queueMeasure() {
+    if (_measureQueued) return;
+    _measureQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measureQueued = false;
+      if (!mounted) return;
+      final page = _pageKey.currentContext?.findRenderObject();
+      final element =
+          widget.marks[_index].targetKey?.currentContext?.findRenderObject();
+      Rect? target;
+      if (page is RenderBox &&
+          page.hasSize &&
+          element is RenderBox &&
+          element.hasSize) {
+        final top = page.globalToLocal(element.localToGlobal(Offset.zero));
+        final bottom = page.globalToLocal(element
+            .localToGlobal(Offset(element.size.width, element.size.height)));
+        final rect = Rect.fromPoints(top, bottom)
+            .inflate(7)
+            .intersect(Offset.zero & page.size);
+        if (!rect.isEmpty) target = rect;
+      }
+      if (_target != target) setState(() => _target = target);
+    });
+  }
+
+  Future<void> _reveal() async {
+    try {
+      final target = widget.marks[_index].targetKey?.currentContext;
+      if (target != null)
+        await Scrollable.ensureVisible(target,
+            duration: const Duration(milliseconds: 180), alignment: 0.1);
+    } catch (_) {
+      /* A target may disappear while the underlying data refreshes. */
+    }
+    if (!mounted) return;
+    setState(() => _moving = false);
+    _queueMeasure();
+  }
+
+  void _step(int next) {
+    if (_moving) return;
+    if (next >= widget.marks.length) {
+      Navigator.of(context).pop(true);
+      return;
+    }
+    if (next < 0) return;
     setState(() {
-      _show = false;
-      _idx = 0;
+      _index = next;
+      _moving = true;
+      _target = null;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _reveal();
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading || !_show) return widget.child;
-    final sem = SemanticColors.of(context);
-    final mark = widget.marks[_idx];
-    return Stack(
-      children: [
-        widget.child,
-        // Backdrop
-        Positioned.fill(
-          child: GestureDetector(
-            onTap: _next,
-            child: Container(color: Colors.black.withOpacity(0.65)),
-          ),
-        ),
-        // Tooltip card
-        Positioned(
-          left: 20,
-          right: 20,
-          top: _alignmentTop(mark.alignment),
-          child: Material(
-            color: Colors.transparent,
-            child: Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: sem.surface,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.3),
-                    blurRadius: 24, offset: const Offset(0, 8),
-                  ),
-                ],
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 44, height: 44,
-                        decoration: BoxDecoration(
-                          color: mark.accent.withOpacity(0.12),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(mark.icon, color: mark.accent, size: 24),
-                      ),
-                      const Spacer(),
-                      Text(
-                        '${_idx + 1} of ${widget.marks.length}',
-                        style: TextStyle(fontSize: 12, color: sem.textTertiary, fontWeight: FontWeight.w600),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      mark.title,
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700, color: sem.textPrimary),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      mark.body,
-                      style: TextStyle(fontSize: 14, color: sem.textSecondary, height: 1.4),
-                      softWrap: true,
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      TextButton(
-                        onPressed: _dismiss,
-                        child: Text('Skip', style: TextStyle(color: sem.textSecondary)),
-                      ),
-                      const Spacer(),
-                      if (_idx > 0)
-                        TextButton(
-                          onPressed: () => setState(() => _idx--),
-                          child: const Text('Back'),
-                        ),
-                      const SizedBox(width: 8),
-                      FilledButton(
-                        onPressed: _next,
-                        style: FilledButton.styleFrom(backgroundColor: mark.accent),
-                        child: Text(_idx == widget.marks.length - 1 ? 'Got it' : 'Next'),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
-        // Page indicator dots
-        Positioned(
-          left: 0, right: 0, bottom: 32,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: List.generate(widget.marks.length, (i) {
-              return Container(
-                margin: const EdgeInsets.symmetric(horizontal: 3),
-                width: i == _idx ? 24 : 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: i == _idx ? mark.accent : Colors.white.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              );
-            }),
-          ),
-        ),
-      ],
-    );
+    final colors = SemanticColors.of(context),
+        scheme = Theme.of(context).colorScheme;
+    final mark = widget.marks[_index];
+    final scale = MediaQuery.textScalerOf(context).scale(1);
+    return PopScope(
+        canPop: false,
+        onPopInvoked: (didPop) {
+          if (!didPop) _step(_index - 1);
+        },
+        child: Semantics(
+            scopesRoute: true,
+            explicitChildNodes: true,
+            namesRoute: true,
+            label: 'Page guidance',
+            child: Stack(key: _pageKey, fit: StackFit.expand, children: [
+              Positioned.fill(
+                  child: CustomPaint(
+                      painter:
+                          _GuideBackdrop(_target, scheme.primaryContainer))),
+              Positioned.fill(
+                  child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      excludeFromSemantics: true,
+                      // Keep the highlighted control and the rest of the shell
+                      // visible but inert until Next, Back, Skip or Done.
+                      onTap: () {},
+                      child: const SizedBox.expand())),
+              SafeArea(child: LayoutBuilder(builder: (context, bounds) {
+                final alignment = _target != null
+                    ? _target!.center.dy < bounds.maxHeight / 2
+                        ? Alignment.bottomCenter
+                        : Alignment.topCenter
+                    : switch (mark.alignment) {
+                        CoachMarkAlignment.topLeft ||
+                        CoachMarkAlignment.topRight =>
+                          Alignment.topCenter,
+                        CoachMarkAlignment.center => Alignment.center,
+                        _ => Alignment.bottomCenter,
+                      };
+                return Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Align(
+                        alignment: alignment,
+                        child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                                maxWidth: 560,
+                                maxHeight: (bounds.maxHeight - 32)
+                                    .clamp(0, double.infinity)),
+                            child: Material(
+                                color: colors.surface,
+                                borderRadius: BorderRadius.circular(24),
+                                child: Padding(
+                                    padding: const EdgeInsets.all(22),
+                                    child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          Semantics(
+                                              liveRegion: true,
+                                              child: LayoutBuilder(
+                                                  builder: (context, c) {
+                                                final title = Text(mark.title,
+                                                    style: TextStyle(
+                                                        fontSize: 19,
+                                                        fontWeight:
+                                                            FontWeight.w700,
+                                                        color: colors
+                                                            .textPrimary));
+                                                final count = Semantics(
+                                                    label:
+                                                        'Step ${_index + 1} of ${widget.marks.length}',
+                                                    child: Text(
+                                                        '${_index + 1} / ${widget.marks.length}',
+                                                        style: TextStyle(
+                                                            fontSize: 13,
+                                                            color: colors
+                                                                .textSecondary,
+                                                            fontWeight:
+                                                                FontWeight
+                                                                    .w600)));
+                                                return scale > 1.4
+                                                    ? Column(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                            Align(
+                                                                alignment: Alignment
+                                                                    .centerRight,
+                                                                child: count),
+                                                            const SizedBox(
+                                                                height: 8),
+                                                            title
+                                                          ])
+                                                    : Row(
+                                                        crossAxisAlignment:
+                                                            CrossAxisAlignment
+                                                                .start,
+                                                        children: [
+                                                            Expanded(
+                                                                child: title),
+                                                            const SizedBox(
+                                                                width: 16),
+                                                            count
+                                                          ]);
+                                              })),
+                                          const SizedBox(height: 14),
+                                          Flexible(
+                                              fit: FlexFit.loose,
+                                              child: SingleChildScrollView(
+                                                  child: Text(mark.body,
+                                                      style: TextStyle(
+                                                          fontSize: 15,
+                                                          height: 1.5,
+                                                          color: colors
+                                                              .textSecondary)))),
+                                          const SizedBox(height: 22),
+                                          LayoutBuilder(builder: (context, c) {
+                                            final back = TextButton(
+                                                onPressed: _index == 0 ||
+                                                        _moving
+                                                    ? null
+                                                    : () => _step(_index - 1),
+                                                style: TextButton.styleFrom(
+                                                    minimumSize:
+                                                        const Size(64, 48)),
+                                                child: const Text('Back'));
+                                            final skip = TextButton(
+                                                onPressed: () =>
+                                                    Navigator.of(context)
+                                                        .pop(true),
+                                                style: TextButton.styleFrom(
+                                                    minimumSize:
+                                                        const Size(64, 48)),
+                                                child: const Text('Skip'));
+                                            final next = FilledButton(
+                                                onPressed: _moving
+                                                    ? null
+                                                    : () => _step(_index + 1),
+                                                style: FilledButton.styleFrom(
+                                                    minimumSize:
+                                                        const Size(80, 48),
+                                                    padding: const EdgeInsets
+                                                        .symmetric(
+                                                        horizontal: 20,
+                                                        vertical: 12)),
+                                                child: Text(_index ==
+                                                        widget.marks.length - 1
+                                                    ? 'Done'
+                                                    : 'Next'));
+                                            if (scale > 1.3 || c.maxWidth < 280)
+                                              return Wrap(
+                                                  spacing: 8,
+                                                  runSpacing: 8,
+                                                  children: [
+                                                    back,
+                                                    skip,
+                                                    SizedBox(
+                                                        width: c.maxWidth,
+                                                        child: next)
+                                                  ]);
+                                            return Row(children: [
+                                              back,
+                                              skip,
+                                              const Spacer(),
+                                              next
+                                            ]);
+                                          }),
+                                        ]))))));
+              })),
+            ])));
+  }
+}
+
+class _GuideBackdrop extends CustomPainter {
+  const _GuideBackdrop(this.target, this.outline);
+  final Rect? target;
+  final Color outline;
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()..addRect(Offset.zero & size);
+    final rect = target;
+    if (rect != null)
+      path.addRRect(RRect.fromRectAndRadius(rect, const Radius.circular(12)));
+    path.fillType = PathFillType.evenOdd;
+    canvas.drawPath(path, Paint()..color = Colors.black.withOpacity(0.58));
+    if (rect != null)
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(rect, const Radius.circular(12)),
+          Paint()
+            ..color = outline
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 3);
   }
 
-  double? _alignmentTop(CoachMarkAlignment a) {
-    final h = MediaQuery.of(context).size.height;
-    // Bottom-aligned marks need to clear the bottom nav (~64dp) + FAB column
-    // (~96dp on owner home with AutoDemo + New request) + safe area (~30dp)
-    // = ~190dp from bottom. Pull the tooltip further up to avoid overlap.
-    const bottomReserved = 220.0;
-    switch (a) {
-      case CoachMarkAlignment.topLeft: return 80;
-      case CoachMarkAlignment.topRight: return 80;
-      case CoachMarkAlignment.center: return (h / 2) - 120;
-      case CoachMarkAlignment.bottomCenter: return h - bottomReserved - 220;
-      case CoachMarkAlignment.bottomLeft: return h - bottomReserved - 220;
-      case CoachMarkAlignment.bottomRight: return h - bottomReserved - 220;
-    }
-  }
+  @override
+  bool shouldRepaint(covariant _GuideBackdrop oldDelegate) =>
+      oldDelegate.target != target || oldDelegate.outline != outline;
 }

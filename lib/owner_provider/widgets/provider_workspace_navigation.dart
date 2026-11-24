@@ -4,9 +4,13 @@ import 'app_bottom_nav.dart';
 /// Top-level provider destinations share the same original navigation visuals.
 class ProviderBottomNav extends StatefulWidget {
   const ProviderBottomNav(
-      {super.key, required this.activeId, required this.onChange});
+      {super.key,
+      required this.activeId,
+      required this.onChange,
+      this.allowActiveNavigation = false});
   final String activeId;
   final Future<void> Function(String) onChange;
+  final bool allowActiveNavigation;
   @override
   State<ProviderBottomNav> createState() => _ProviderBottomNavState();
 }
@@ -14,7 +18,8 @@ class ProviderBottomNav extends StatefulWidget {
 class _ProviderBottomNavState extends State<ProviderBottomNav> {
   bool _navigating = false;
   Future<void> _change(String id) async {
-    if (_navigating || id == widget.activeId) return;
+    if (_navigating || id == widget.activeId && !widget.allowActiveNavigation)
+      return;
     _navigating = true;
     try {
       await widget.onChange(id);
@@ -48,7 +53,13 @@ abstract final class ProviderTabNavigation {
       navigator.popUntil((route) => route.isFirst);
       return;
     }
-    final current = ModalRoute.of(context)?.settings.name;
+    Route<dynamic>? primary;
+    navigator.popUntil((route) {
+      primary = route;
+      return route.isFirst ||
+          route.settings.name?.startsWith('/provider-tab/') == true;
+    });
+    final current = primary?.settings.name;
     final target = nameFor(id);
     if (current == target) return;
     final route = MaterialPageRoute<void>(

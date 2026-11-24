@@ -32,11 +32,12 @@ class StatusChip extends StatelessWidget {
             decoration: BoxDecoration(color: accent, shape: BoxShape.circle),
           ),
           const SizedBox(width: 6),
-          Text(
+          Flexible(
+              child: Text(
             status.label,
             style: TextStyle(
                 color: accent, fontSize: 12, fontWeight: FontWeight.w600),
-          ),
+          )),
         ],
       ),
     );

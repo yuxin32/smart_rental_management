@@ -80,16 +80,28 @@ class _WorkspaceProfileState extends State<WorkspaceProfile>
           provider: snapshot.presentation,
           snapshot: snapshot,
           onSaveConnected: widget.backend.provider.saveMyProfile,
+          loadServiceAreas: widget.backend.owner.locations.areas,
           onReloadConnected: widget.backend.provider.myProfile,
           canEditConnected: () => binding.canEdit,
           onManageAvailability: _manageAvailability);
     return ProviderProfileScreen(
-        onSettings: (page) {
+        onSettings: (page) async {
           final actions = WorkspaceActions(widget.backend, UserRole.provider);
-          if (page == 'about') {
-            actions.about(context);
-          } else {
-            actions.settings(context, page);
+          try {
+            if (page == 'about') {
+              await actions.about(context);
+            } else if (page == 'stats') {
+              await actions.statistics(context);
+            } else if (page == 'sign-out') {
+              await actions.signOut(context);
+            } else {
+              await actions.settings(context, page);
+            }
+          } catch (_) {
+            if (mounted)
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content:
+                      Text('Could not open this page. Please try again.')));
           }
         },
         refreshNotice: SnapshotRefreshNotice(

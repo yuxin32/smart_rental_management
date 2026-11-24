@@ -29,6 +29,7 @@ import '../widgets/coach_mark.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/workspace_actions.dart';
 import '../widgets/owner_workspace_navigation.dart';
+import '../widgets/profile_sign_out_confirmation.dart';
 import 'owner_workspace_dashboard.dart';
 import 'owner_booking_feed.dart';
 import '../services/backend/supabase_booking_repository.dart';
@@ -1228,7 +1229,18 @@ class OwnerProfileScreen extends StatelessWidget {
                     'Guides, support, terms and privacy'),
                 if (snapshot != null) ...[
                   const Divider(height: 1),
-                  _tile(context, Icons.logout, 'Sign out', null),
+                  _tile(
+                    context,
+                    Icons.logout,
+                    'Sign out',
+                    null,
+                    onTap: onAction == null
+                        ? null
+                        : () => confirmProfileSignOut(
+                              context,
+                              () => onAction!('Sign out'),
+                            ),
+                  ),
                 ],
               ]),
               const SizedBox(height: 32),

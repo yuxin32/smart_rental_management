@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'authenticated_memory_cache.dart';
 import 'reference_data.dart';
 import 'session_snapshot_cache.dart';
+import 'service_location.dart';
 
 /// Safe fields returned by the approved-provider directory RPC. The exact
 /// service origin is intentionally not part of this owner-facing model.
@@ -52,6 +53,9 @@ class EligibleProviderItem {
     required this.completedJobCount,
     required this.quoteBasis,
     required this.quotedAmount,
+    this.displayName,
+    this.distanceKm,
+    this.activeJobCount,
   });
 
   final String providerId;
@@ -63,6 +67,9 @@ class EligibleProviderItem {
   final int completedJobCount;
   final String quoteBasis;
   final num quotedAmount;
+  final String? displayName;
+  final double? distanceKm;
+  final int? activeJobCount;
 
   factory EligibleProviderItem.fromJson(Map<String, dynamic> row) =>
       EligibleProviderItem(
@@ -75,7 +82,54 @@ class EligibleProviderItem {
         completedJobCount: row['completed_job_count'] as int,
         quoteBasis: row['quote_basis'] as String,
         quotedAmount: row['quoted_amount'] as num,
+        displayName: row['full_name'] as String?,
+        distanceKm: _distance(row['distance_km']),
+        activeJobCount: (row['active_job_count'] as num?)?.toInt(),
       );
+  static double? _distance(dynamic value) {
+    if (value == null) return null;
+    final distance = (value as num).toDouble();
+    if (!distance.isFinite || distance < 0)
+      throw const FormatException('Invalid distance');
+    return distance;
+  }
+}
+
+class AlternativeProviderTime {
+  AlternativeProviderTime(this.provider, this.start, this.end) {
+    if (!end.isAfter(start) || end.difference(start) > const Duration(hours: 8))
+      throw const FormatException('Invalid alternative interval');
+  }
+  final EligibleProviderItem provider;
+  final DateTime start, end;
+  factory AlternativeProviderTime.fromJson(Map<String, dynamic> row) =>
+      AlternativeProviderTime(
+          EligibleProviderItem.fromJson(row),
+          DateTime.parse(row['start_at'] as String).toUtc(),
+          DateTime.parse(row['end_at'] as String).toUtc());
+}
+
+class ProviderSearchResult {
+  const ProviderSearchResult(
+      {required this.current,
+      this.alternatives = const [],
+      this.locationRequired = false,
+      this.areaName});
+  final List<EligibleProviderItem> current;
+  final List<AlternativeProviderTime> alternatives;
+  final bool locationRequired;
+  final String? areaName;
+  factory ProviderSearchResult.fromJson(Map<String, dynamic> row) =>
+      ProviderSearchResult(
+          current: List<Map<String, dynamic>>.from(row['current'] as List)
+              .map(EligibleProviderItem.fromJson)
+              .toList(),
+          alternatives:
+              List<Map<String, dynamic>>.from(row['alternatives'] as List)
+                  .map(AlternativeProviderTime.fromJson)
+                  .toList(),
+          locationRequired: row['location_required'] == true,
+          areaName: row['area_name'] as String?);
 }
 
 class OwnerDashboardSnapshot {
@@ -116,14 +170,27 @@ class SupabaseOwnerRepository {
   }
 
   Future<List<Map<String, dynamic>>> properties() async {
+    final actor = _ownerId;
     final rows = await client
         .from('property')
         .select(
-          'property_id,unit_name,building_name,address,bedrooms,size_sqft,cleaning_window_start,cleaning_window_end',
+          'property_id,unit_name,building_name,address,bedrooms,size_sqft,cleaning_window_start,cleaning_window_end,property_revision',
         )
         .eq('owner_id', _ownerId)
         .order('building_name');
-    return List<Map<String, dynamic>>.from(rows);
+    final locations = List<Map<String, dynamic>>.from(
+        await client.rpc('list_my_property_locations') as List);
+    if (_ownerId != actor) throw StateError('Session changed');
+    return List<Map<String, dynamic>>.from(rows)
+        .map((row) => {
+              ...row,
+              'location': locations
+                      .where((l) => l['property_id'] == row['property_id'])
+                      .map((l) => l['location'])
+                      .firstOrNull ??
+                  <String, dynamic>{}
+            })
+        .toList();
   }
 
   Future<List<Map<String, dynamic>>> serviceTypes({bool force = false}) =>
@@ -160,6 +227,8 @@ class SupabaseOwnerRepository {
     required int sizeSqft,
     required String cleaningWindowStart,
     required String cleaningWindowEnd,
+    String? areaId,
+    String pinLink = '',
   }) async {
     if (unitName.trim().isEmpty ||
         buildingName.trim().isEmpty ||
@@ -168,6 +237,23 @@ class SupabaseOwnerRepository {
         sizeSqft <= 0 ||
         cleaningWindowStart.compareTo(cleaningWindowEnd) >= 0) {
       throw ArgumentError('Enter valid property details and cleaning window.');
+    }
+    if (areaId != null) {
+      final result = Map<String, dynamic>.from(await _write(
+          () async => await client.rpc('create_located_property', params: {
+                'p_area_id': areaId,
+                'p_pin_link': pinLink.trim(),
+                'p_input': {
+                  'unit_name': unitName.trim(),
+                  'building_name': buildingName.trim(),
+                  'address': address.trim(),
+                  'bedrooms': bedrooms,
+                  'size_sqft': sizeSqft,
+                  'cleaning_window_start': cleaningWindowStart,
+                  'cleaning_window_end': cleaningWindowEnd
+                },
+              })) as Map);
+      return result['property_id'] as String;
     }
     final row = await _write(() async => await client
         .from('property')
@@ -184,6 +270,28 @@ class SupabaseOwnerRepository {
         .select('property_id')
         .single());
     return row['property_id'] as String;
+  }
+
+  ServiceLocationRepository get locations => ServiceLocationRepository(client);
+  Future<void> savePropertyLocation(
+          String id, int revision, String area, String pin) =>
+      _write(() => locations.saveProperty(id, revision, area, pin));
+
+  Future<ProviderSearchResult> findMatches(
+      {required String propertyId,
+      required String serviceTypeId,
+      required DateTime start,
+      required DateTime end}) async {
+    final actor = _ownerId;
+    final data = Map<String, dynamic>.from(
+        await client.rpc('find_provider_matches', params: {
+      'p_property_id': propertyId,
+      'p_service_type_id': serviceTypeId,
+      'p_start_at': start.toUtc().toIso8601String(),
+      'p_end_at': end.toUtc().toIso8601String(),
+    }) as Map);
+    if (_ownerId != actor) throw StateError('Session changed');
+    return ProviderSearchResult.fromJson(data);
   }
 
   Future<void> updateProperty({

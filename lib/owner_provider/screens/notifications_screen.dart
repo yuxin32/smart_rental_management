@@ -429,11 +429,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.symmetric(vertical: 8),
             children: [
-              const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Text(
-                      'Booking updates inside the app. Device push notifications are not enabled.',
-                      style: TextStyle(fontSize: 12))),
               SnapshotRefreshNotice(
                   refreshing: binding.loading,
                   failed: binding.refreshError != null,
@@ -442,12 +437,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 const Padding(
                     padding: EdgeInsets.all(16),
                     child: Text(
-                        'Could not confirm read status. Pull down to check saved status before retrying.')),
+                        'Read status not confirmed. Pull down to check.')),
               if (binding.liveError != null)
                 const Padding(
                     padding: EdgeInsets.all(16),
                     child: Text(
-                        'Live updates interrupted. Pull down to check current notifications.')),
+                        'Updates paused. Pull down to refresh.')),
               if (unavailable || items.isEmpty)
                 state
               else

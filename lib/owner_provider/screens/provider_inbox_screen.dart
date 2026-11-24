@@ -12,7 +12,7 @@ import '../services/booking_store.dart';
 import '../theme/app_theme.dart';
 import '../utils/haptics.dart';
 import '../widgets/provider_workspace_navigation.dart';
-import '../widgets/app_drawer.dart';
+import '../widgets/message_unread_scope.dart';
 import '../widgets/coach_mark.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/filter_sheet.dart';
@@ -27,6 +27,8 @@ import 'provider_job_detail_screen.dart';
 import 'provider_profile_screen.dart';
 import 'provider_schedule_screen.dart';
 import 'provider_stats_screen.dart';
+import 'account_settings_screens.dart';
+import '../services/user_session.dart';
 
 class ProviderInboxScreen extends StatefulWidget {
   const ProviderInboxScreen({
@@ -52,6 +54,9 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
   String _navTab = 'inbox';
   FilterResult _filter = FilterResult.empty;
   final _searchCtrl = TextEditingController();
+  final _guideOverview = GlobalKey();
+  final _guideNavigation = GlobalKey();
+  final _guideRequest = GlobalKey();
   String _searchQuery = '';
 
   bool get _connected => widget.binding != null;
@@ -186,7 +191,7 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
     }
   }
 
-  Future<void> _onDrawerNav(String id) async {
+  Future<void> _navigate(String id) async {
     if (!_connected) {
       await _onPreviewNav(id);
       return;
@@ -338,7 +343,7 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
     }
   }
 
-  Future<void> _onPreviewNav(String id, {bool bottomNav = false}) async {
+  Future<void> _onPreviewNav(String id) async {
     final app = AppProviders.of(context);
     switch (id) {
       case 'inbox':
@@ -366,17 +371,16 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
         );
         break;
       case 'profile':
-        if (!bottomNav) {
-          await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ProviderProfileScreen(
-                provider: widget.provider ?? DemoProvider.seeded().first,
-              ),
+        await Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ProviderProfileScreen(
+              provider: app.providerStore.currentProvider ??
+                  widget.provider ??
+                  DemoProvider.seeded().first,
+              onSettings: (page) => _navigate(page),
             ),
-          );
-          break;
-        }
-        await _onPreviewNav('edit_profile');
+          ),
+        );
         break;
       case 'edit_profile':
         final current =
@@ -409,8 +413,22 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
           ),
         );
         break;
+      case 'appearance':
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => const AppearanceSettingsScreen()));
+        break;
+      case 'privacy':
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+            builder: (_) => PrivacySecurityScreen(
+                email: UserSessionAccess.of(context).email,
+                role: 'Cleaning Service Provider',
+                onSignOut: () => _onPreviewNav('sign-out'))));
+        break;
+      case 'sign-out':
+        UserSessionAccess.of(context).signOut();
+        Navigator.of(context).popUntil((route) => route.isFirst);
+        break;
     }
-    if (bottomNav && mounted) setState(() => _navTab = 'inbox');
   }
 
   void _openFilter() async {
@@ -447,7 +465,6 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
   Widget _buildWorkspace(BuildContext context) {
     if (!widget.showShell) return _buildContent(context);
     return Scaffold(
-      drawer: AppDrawer(role: 'Provider', onNavigate: _onDrawerNav),
       appBar: _buildAppBar(context),
       body: CoachMarkOverlay(
         setId: 'provider_inbox_v1',
@@ -455,31 +472,30 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
           CoachMark(
             id: 'earnings',
             icon: Icons.account_balance_wallet,
-            title: 'Your work at a glance',
-            body: _connected
-                ? 'Review loaded jobs below. Open Earnings for your completed-job value and history.'
-                : "See this week's earnings, upcoming jobs, and incoming requests below your workspace card.",
+            title: 'Your work overview',
+            body:
+                'See incoming requests and upcoming jobs. Open Earnings to review your completed cleaning fees.',
+            targetKey: _guideOverview,
             accent: AppColors.primary,
             alignment: CoachMarkAlignment.topLeft,
           ),
           CoachMark(
             id: 'tabs',
             icon: Icons.tab,
-            title: '4 quick tabs',
-            body: _connected
-                ? 'Inbox / Schedule / Earnings / Profile. Unavailable sections are marked as not connected.'
-                : 'Inbox / Schedule / Earnings / Profile. Tap a tab to navigate.',
+            title: 'Your main pages',
+            body:
+                'Use Inbox, Schedule, Earnings and Profile to move between your work, calendar, income and settings.',
+            targetKey: _guideNavigation,
             accent: AppColors.primary,
             alignment: CoachMarkAlignment.bottomCenter,
           ),
           CoachMark(
             id: 'accept',
             icon: Icons.check_circle,
-            title:
-                _connected ? 'Review incoming requests' : 'Accept in one tap',
-            body: _connected
-                ? 'Tap Review request to open booking details and respond securely.'
-                : 'New job requests show here. Tap Accept to confirm, or Decline to pass.',
+            title: 'Review a new request',
+            body:
+                'Open a request card to check the job details, then choose Accept request or Decline.',
+            targetKey: _guideRequest,
             accent: AppColors.primary,
             alignment: CoachMarkAlignment.topRight,
           ),
@@ -487,14 +503,11 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
         child: _buildContent(context),
       ),
       bottomNavigationBar: ProviderBottomNav(
+        key: _guideNavigation,
         activeId: _navTab,
         onChange: (id) async {
           Haptics.selection();
-          if (_connected) {
-            await _onDrawerNav(id);
-          } else {
-            await _onPreviewNav(id, bottomNav: true);
-          }
+          await _navigate(id);
         },
       ),
     );
@@ -505,17 +518,11 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
     return AppBar(
       title: const Text('Provider Inbox'),
       actions: [
-        Builder(
-          builder: (ctx) {
-            final isDark2 = Theme.of(ctx).brightness == Brightness.dark;
-            return IconButton(
-              icon: Icon(
-                isDark2 ? Icons.light_mode_outlined : Icons.dark_mode_outlined,
-              ),
-              onPressed: () => AppProviders.of(ctx).onToggleTheme(),
-              tooltip: isDark2 ? 'Switch to light mode' : 'Switch to dark mode',
-            );
-          },
+        IconButton(
+          tooltip: 'Messages',
+          icon:
+              const MessageUnreadBadge(child: Icon(Icons.chat_bubble_outline)),
+          onPressed: () => _navigate('messages'),
         ),
         IconButton(
           icon: Stack(
@@ -526,7 +533,7 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
                 const Positioned(top: -2, right: -2, child: _NotificationDot()),
             ],
           ),
-          onPressed: () => _onDrawerNav('notifications'),
+          onPressed: () => _navigate('notifications'),
           tooltip: 'Notifications',
         ),
         IconButton(
@@ -696,6 +703,7 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
     final newReq = all.where((b) => b.status == BookingStatus.pending).length;
     final sem = SemanticColors.of(context);
     return Padding(
+      key: _guideOverview,
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1003,7 +1011,10 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
         if (state != null) return state;
         final b = items[i];
         return _ProviderJobCard(
+          key: tab == _InboxTab.newRequests && i == 0 ? _guideRequest : null,
           booking: b,
+          responseDeadline:
+              b.scheduledStart.subtract(const Duration(hours: 8)),
           onTap: () => _openDetail(b),
         );
       },
@@ -1032,6 +1043,7 @@ class _ProviderInboxScreenState extends State<ProviderInboxScreen>
       itemBuilder: (ctx, i) {
         final b = items[i];
         return _ProviderJobCard(
+          key: tab == _InboxTab.newRequests && i == 0 ? _guideRequest : null,
           booking: b,
           onTap: () => _openDetail(b),
           onAccept: () => _accept(b, store),
@@ -1148,25 +1160,35 @@ class _EarningsStat extends StatelessWidget {
 
 class _ProviderJobCard extends StatelessWidget {
   const _ProviderJobCard({
+    super.key,
     required this.booking,
     required this.onTap,
     this.onAccept,
     this.onDecline,
+    this.responseDeadline,
   });
   final DemoBooking booking;
   final VoidCallback onTap;
   final VoidCallback? onAccept;
   final VoidCallback? onDecline;
+  // Connected bookings display MYT wall time; expiry compares real instants.
+  final DateTime? responseDeadline;
 
   @override
   Widget build(BuildContext context) {
     final sem = SemanticColors.of(context);
-    final canRespond = booking.status == BookingStatus.pending;
+    final timePassed = booking.status == BookingStatus.pending &&
+        !(responseDeadline ?? booking.scheduledStart).isAfter(DateTime.now());
+    final canRespond = booking.status == BookingStatus.pending && !timePassed;
+    final scheme = Theme.of(context).colorScheme;
     return Material(
-      color: sem.surface,
+      color: timePassed
+          ? Color.alphaBlend(scheme.error.withOpacity(0.07), sem.surface)
+          : sem.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(16),
-        side: BorderSide(color: sem.border),
+        side: BorderSide(
+            color: timePassed ? scheme.error.withOpacity(0.55) : sem.border),
       ),
       child: InkWell(
         onTap: onTap,
@@ -1182,13 +1204,19 @@ class _ProviderJobCard extends StatelessWidget {
                     width: 34,
                     height: 34,
                     decoration: BoxDecoration(
-                      color: sem.primarySurface,
+                      color: timePassed
+                          ? scheme.errorContainer
+                          : sem.primarySurface,
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Icon(
-                      Icons.cleaning_services,
+                      timePassed
+                          ? Icons.timer_off_outlined
+                          : Icons.cleaning_services,
                       size: 17,
-                      color: Theme.of(context).colorScheme.primary,
+                      color: timePassed
+                          ? scheme.onErrorContainer
+                          : scheme.primary,
                     ),
                   ),
                   const SizedBox(width: 10),
@@ -1204,7 +1232,23 @@ class _ProviderJobCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  StatusChip(status: booking.status),
+                  if (timePassed)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                          color: scheme.errorContainer,
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                              color: scheme.error.withOpacity(0.4))),
+                      child: Text('Expired',
+                          style: TextStyle(
+                              color: scheme.onErrorContainer,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700)),
+                    )
+                  else
+                    StatusChip(status: booking.status),
                 ],
               ),
               const SizedBox(height: 12),
@@ -1238,9 +1282,19 @@ class _ProviderJobCard extends StatelessWidget {
                       ),
                     ),
                   ),
-                  Icon(Icons.chevron_right, size: 18, color: sem.textTertiary),
+                  if (booking.status != BookingStatus.pending)
+                    Icon(Icons.chevron_right,
+                        size: 18, color: sem.textTertiary),
                 ],
               ),
+              if (timePassed) ...[
+                const SizedBox(height: 8),
+                Text('Response time passed',
+                    style: TextStyle(
+                        color: scheme.error,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600)),
+              ],
               if (booking.specialInstructions != null) ...[
                 const SizedBox(height: 12),
                 Container(
@@ -1270,44 +1324,33 @@ class _ProviderJobCard extends StatelessWidget {
                   ),
                 ),
               ],
-              if (canRespond) ...[
+              if (canRespond && onAccept != null && onDecline != null) ...[
                 const SizedBox(height: 16),
-                if (onAccept != null && onDecline != null)
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: onDecline,
-                          icon: const Icon(Icons.close, size: 16),
-                          label: const Text('Decline'),
-                          style: OutlinedButton.styleFrom(
-                            foregroundColor:
-                                Theme.of(context).colorScheme.error,
-                            side: BorderSide(
-                              color: Theme.of(context).colorScheme.error,
-                            ),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: onDecline,
+                        icon: const Icon(Icons.close, size: 16),
+                        label: const Text('Decline'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Theme.of(context).colorScheme.error,
+                          side: BorderSide(
+                            color: Theme.of(context).colorScheme.error,
                           ),
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: onAccept,
-                          icon: const Icon(Icons.check, size: 16),
-                          label: const Text('Accept'),
-                        ),
-                      ),
-                    ],
-                  )
-                else
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: onTap,
-                      icon: const Icon(Icons.fact_check_outlined, size: 16),
-                      label: const Text('Review request'),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: FilledButton.icon(
+                        onPressed: onAccept,
+                        icon: const Icon(Icons.check, size: 16),
+                        label: const Text('Accept'),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ],
           ),

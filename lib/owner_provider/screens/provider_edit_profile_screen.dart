@@ -1,5 +1,5 @@
 // lib/screens/provider_edit_profile_screen.dart
-// Provider profile editor. Reads from + writes to ProviderStore.
+// Provider profile editor with server-confirmed saving for connected accounts.
 //
 // Round 7 polish:
 //   1. Form validation (name, phone, email, rate, working hours)
@@ -21,6 +21,9 @@ import '../models/demo_data.dart';
 import '../theme/app_theme.dart';
 import '../utils/haptics.dart';
 import '../widgets/time_slot_picker.dart';
+import '../widgets/service_location_fields.dart';
+import '../widgets/provider_working_hours_summary.dart';
+import '../services/backend/service_location.dart';
 import 'provider_profile_screen.dart';
 import '../services/backend/provider_profile_snapshot.dart';
 import '../services/backend/connected_failure_message.dart';
@@ -35,6 +38,7 @@ class ProviderEditProfileScreen extends StatefulWidget {
       this.onSaveConnected,
       this.onReloadConnected,
       this.canEditConnected,
+      this.loadServiceAreas,
       this.onManageAvailability});
   final DemoProvider provider;
   final ProviderProfileSnapshot? snapshot;
@@ -43,6 +47,7 @@ class ProviderEditProfileScreen extends StatefulWidget {
   final Future<ProviderProfileSnapshot> Function()? onReloadConnected;
   final bool Function()? canEditConnected;
   final Future<void> Function()? onManageAvailability;
+  final Future<List<ServiceAreaOption>> Function()? loadServiceAreas;
 
   @override
   State<ProviderEditProfileScreen> createState() =>
@@ -52,6 +57,9 @@ class ProviderEditProfileScreen extends StatefulWidget {
 class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
   // Controllers ------------------------------------------------------------
   final _formKey = GlobalKey<FormState>();
+  final _originPin = TextEditingController();
+  Set<String> _coverageAreas = {};
+  List<ServiceAreaOption> _coverageOptions = const [];
   late TextEditingController _nameCtrl;
   late TextEditingController _phoneCtrl;
   late TextEditingController _emailCtrl;
@@ -111,6 +119,14 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
     _dailyCtrl = TextEditingController(text: _rateText(_server?.daily));
     _areaCtrl = TextEditingController(text: _server?.area ?? '');
     _originCtrl = TextEditingController(text: _server?.origin ?? '');
+    _coverageAreas = Set<String>.from(
+        (_server?.row['location'] as Map?)?['area_ids'] as List? ?? []);
+    _originPin.text =
+        (_server?.row['location'] as Map?)?['pin_link'] as String? ?? '';
+    _originCtrl.addListener(() {
+      if (_server != null && _originCtrl.text.trim() != _server!.origin)
+        _originPin.clear();
+    });
     _workStart = p.workingHoursStart;
     _workEnd = p.workingHoursEnd;
     _services =
@@ -126,6 +142,7 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
       _dailyCtrl,
       _areaCtrl,
       _originCtrl,
+      _originPin,
     ]) {
       controller.addListener(_refreshSaveState);
     }
@@ -145,11 +162,21 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
     _dailyCtrl.dispose();
     _areaCtrl.dispose();
     _originCtrl.dispose();
+    _originPin.dispose();
     super.dispose();
   }
 
   // Dirty-state detection ---------------------------------------------------
   bool get _isDirty {
+    if (_connected) {
+      final original = Set<String>.from(
+          (_server?.row['location'] as Map?)?['area_ids'] as List? ?? []);
+      if (_coverageAreas.length != original.length ||
+          !_coverageAreas.containsAll(original) ||
+          _originPin.text.trim() !=
+              ((_server?.row['location'] as Map?)?['pin_link'] as String? ??
+                  '')) return true;
+    }
     if (_nameCtrl.text.trim() != _initial.name) return true;
     if (_phoneCtrl.text.trim() != _initial.phone) return true;
     if (_emailCtrl.text.trim() != _initial.email) return true;
@@ -445,6 +472,11 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
   Future<void> _saveConnected() async {
     if (_saving || _needsReload || widget.canEditConnected?.call() != true)
       return;
+    if (widget.loadServiceAreas != null &&
+        (_coverageAreas.isEmpty || _coverageOptions.isEmpty)) {
+      setState(() => _saveError = 'Select at least one service coverage area.');
+      return;
+    }
     if (!_formKey.currentState!.validate() || _services.isEmpty) {
       setState(() => _saveError =
           'Check the highlighted fields and select at least one service.');
@@ -454,13 +486,21 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
         name: _nameCtrl.text,
         bio: _bioCtrl.text,
         phone: _phoneCtrl.text,
-        area: _areaCtrl.text,
+        area: widget.loadServiceAreas == null
+            ? _areaCtrl.text
+            : _coverageOptions
+                .where((a) => _coverageAreas.contains(a.id))
+                .take(2)
+                .map((a) => a.name)
+                .join(' / '),
         origin: _originCtrl.text,
         hourly: double.tryParse(_rateCtrl.text),
         daily: double.tryParse(_dailyCtrl.text),
         avatar: _avatarColorIndex,
         sharePhone: _showPhoneToOwners,
-        services: _services.toSet());
+        services: _services.toSet(),
+        coverageAreaIds: _coverageAreas,
+        originPinLink: _originPin.text);
     setState(() {
       _saving = true;
       _saveError = null;
@@ -540,6 +580,10 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
       _dailyCtrl.text = _rateText(value.daily);
       _areaCtrl.text = value.area;
       _originCtrl.text = value.origin;
+      _coverageAreas = Set<String>.from(
+          (value.row['location'] as Map?)?['area_ids'] as List? ?? []);
+      _originPin.text =
+          (value.row['location'] as Map?)?['pin_link'] as String? ?? '';
       _services = value.selected.toList();
       _avatarColorIndex = value.avatar;
       _showPhoneToOwners = value.sharePhone;
@@ -618,195 +662,224 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
               ],
               AbsorbPointer(
                   absorbing: _saving,
-                  child: Column(children: [
-                    _buildProfileIntro(sem),
-                    const SizedBox(height: 20),
-                    _sectionCard(
-                      sem: sem,
-                      title: 'About you',
-                      subtitle: 'What property owners see on your profile',
-                      icon: Icons.person_outline,
-                      children: [
-                        _buildAvatarSection(sem),
-                        const SizedBox(height: 20),
-                        _validatedField(
-                          label: 'Display name',
-                          controller: _nameCtrl,
-                          hint: 'e.g. Aina Cleaning Services',
-                          icon: Icons.person_outline,
-                          sem: sem,
-                          validator: _validateName,
-                          maxLength: 60,
-                          inputFormatters: [
-                            LengthLimitingTextInputFormatter(60)
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        _bioField(sem),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    _sectionCard(
-                      sem: sem,
-                      title: 'Services & rate',
-                      subtitle: _connected
-                          ? 'Your services and booking rates'
-                          : 'Choose what you offer and set your hourly rate',
-                      icon: Icons.cleaning_services_outlined,
-                      children: [
-                        _buildServicesChips(sem),
-                        const SizedBox(height: 16),
-                        _validatedField(
-                          label: 'Hourly rate',
-                          controller: _rateCtrl,
-                          hint: '80',
-                          icon: Icons.payments_outlined,
-                          sem: sem,
-                          validator: _validateRate,
-                          keyboardType: _connected
-                              ? const TextInputType.numberWithOptions(
-                                  decimal: true)
-                              : TextInputType.number,
-                          suffix: 'RM/hr',
-                          inputFormatters: _connected
-                              ? null
-                              : [
-                                  FilteringTextInputFormatter.digitsOnly,
-                                  LengthLimitingTextInputFormatter(4),
-                                ],
-                        ),
-                        const SizedBox(height: 6),
-                        _hint('Select at least one service.', sem),
-                        if (_connected) ...[
-                          const SizedBox(height: 14),
-                          _validatedField(
-                              label: '8-hour daily rate',
-                              controller: _dailyCtrl,
-                              hint: 'e.g. 480.00',
-                              icon: Icons.payments_outlined,
-                              sem: sem,
-                              validator: (v) => _validateConnectedRate(
-                                  (v ?? '').trim(), _rateCtrl.text.trim()),
-                              keyboardType:
-                                  const TextInputType.numberWithOptions(
-                                      decimal: true),
-                              suffix: 'RM / 8 hours'),
-                          const SizedBox(height: 8),
-                          _hint(
-                              'At least one rate is required. The daily rate applies only to an 8-hour booking. Existing booking quotes do not change.',
-                              sem),
-                          const SizedBox(height: 14),
-                          _validatedField(
-                              label: 'Service area',
-                              controller: _areaCtrl,
-                              hint: 'e.g. Setapak, Kuala Lumpur',
-                              icon: Icons.location_on_outlined,
-                              sem: sem,
-                              validator: (v) => (v ?? '').trim().isEmpty ||
-                                      (v ?? '').trim().length > 200
-                                  ? 'Enter a service area (max 200 characters)'
-                                  : null),
-                          const SizedBox(height: 14),
-                          _validatedField(
-                              label: 'Private starting address',
-                              controller: _originCtrl,
-                              hint: 'e.g. 12 Jalan Example, Kuala Lumpur',
-                              icon: Icons.lock_outline,
-                              sem: sem,
-                              validator: (v) => (v ?? '').trim().isEmpty ||
-                                      (v ?? '').trim().length > 500
-                                  ? 'Enter your starting address (max 500 characters)'
-                                  : null),
-                          const SizedBox(height: 6),
-                          _hint(
-                              'Private: not exposed in the provider directory.',
-                              sem),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    _sectionCard(
-                      sem: sem,
-                      title: 'Working hours',
-                      subtitle: 'Your default start and end time',
-                      icon: Icons.schedule_outlined,
-                      children: [
-                        if (_connected) ...[
-                          Text(_server!.weeklySummary,
-                              style: TextStyle(
-                                  color: sem.textPrimary, height: 1.5)),
-                          const SizedBox(height: 10),
-                          OutlinedButton.icon(
-                              onPressed: _manageConnectedAvailability,
-                              icon: const Icon(Icons.schedule),
-                              label: const Text('Manage weekly availability')),
-                          _hint(
-                              'Times are in Malaysia time (MYT). Saving your profile does not replace working slots.',
-                              sem),
-                        ] else ...[
-                          Row(
+                  child: _connected
+                      ? _buildConnectedForm(sem)
+                      : Column(children: [
+                          _buildProfileIntro(sem),
+                          const SizedBox(height: 20),
+                          _sectionCard(
+                            sem: sem,
+                            title: 'About you',
+                            subtitle:
+                                'What property owners see on your profile',
+                            icon: Icons.person_outline,
                             children: [
-                              Expanded(
-                                child: _buildTimePicker('Start', _workStart,
-                                    () => _pickTime(isStart: true), sem),
+                              _buildAvatarSection(sem),
+                              const SizedBox(height: 20),
+                              _validatedField(
+                                label: 'Display name',
+                                controller: _nameCtrl,
+                                hint: 'e.g. Aina Cleaning Services',
+                                icon: Icons.person_outline,
+                                sem: sem,
+                                validator: _validateName,
+                                maxLength: 60,
+                                inputFormatters: [
+                                  LengthLimitingTextInputFormatter(60)
+                                ],
                               ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: _buildTimePicker('End', _workEnd,
-                                    () => _pickTime(isStart: false), sem),
-                              ),
+                              const SizedBox(height: 12),
+                              _bioField(sem),
                             ],
                           ),
-                          const SizedBox(height: 10),
-                          _hint(
-                            'Changing these hours replaces the slots on each active weekday. Use My schedule for different slots or unavailable dates.',
-                            sem,
+                          const SizedBox(height: 16),
+                          _sectionCard(
+                            sem: sem,
+                            title: 'Services & rate',
+                            subtitle: _connected
+                                ? 'Your services and booking rates'
+                                : 'Choose what you offer and set your hourly rate',
+                            icon: Icons.cleaning_services_outlined,
+                            children: [
+                              _buildServicesChips(sem),
+                              const SizedBox(height: 16),
+                              _validatedField(
+                                label: 'Hourly rate',
+                                controller: _rateCtrl,
+                                hint: '80',
+                                icon: Icons.payments_outlined,
+                                sem: sem,
+                                validator: _validateRate,
+                                keyboardType: _connected
+                                    ? const TextInputType.numberWithOptions(
+                                        decimal: true)
+                                    : TextInputType.number,
+                                suffix: 'RM/hr',
+                                inputFormatters: _connected
+                                    ? null
+                                    : [
+                                        FilteringTextInputFormatter.digitsOnly,
+                                        LengthLimitingTextInputFormatter(4),
+                                      ],
+                              ),
+                              const SizedBox(height: 6),
+                              _hint('Select at least one service.', sem),
+                              if (_connected) ...[
+                                const SizedBox(height: 14),
+                                _validatedField(
+                                    label: '8-hour daily rate',
+                                    controller: _dailyCtrl,
+                                    hint: 'e.g. 480.00',
+                                    icon: Icons.payments_outlined,
+                                    sem: sem,
+                                    validator: (v) => _validateConnectedRate(
+                                        (v ?? '').trim(),
+                                        _rateCtrl.text.trim()),
+                                    keyboardType:
+                                        const TextInputType.numberWithOptions(
+                                            decimal: true),
+                                    suffix: 'RM / 8 hours'),
+                                const SizedBox(height: 8),
+                                _hint(
+                                    'At least one rate is required. The daily rate applies only to an 8-hour booking. Existing booking quotes do not change.',
+                                    sem),
+                                const SizedBox(height: 14),
+                                if (widget.loadServiceAreas == null)
+                                  _validatedField(
+                                      label: 'Service area',
+                                      controller: _areaCtrl,
+                                      hint: 'e.g. Setapak, Kuala Lumpur',
+                                      icon: Icons.location_on_outlined,
+                                      sem: sem,
+                                      validator: (v) => (v ?? '')
+                                                  .trim()
+                                                  .isEmpty ||
+                                              (v ?? '').trim().length > 200
+                                          ? 'Enter a service area (max 200 characters)'
+                                          : null),
+                                const SizedBox(height: 14),
+                                _validatedField(
+                                    label: 'Private starting address',
+                                    controller: _originCtrl,
+                                    hint: 'e.g. 12 Jalan Example, Kuala Lumpur',
+                                    icon: Icons.lock_outline,
+                                    sem: sem,
+                                    validator: (v) => (v ?? '')
+                                                .trim()
+                                                .isEmpty ||
+                                            (v ?? '').trim().length > 500
+                                        ? 'Enter your starting address (max 500 characters)'
+                                        : null),
+                                const SizedBox(height: 6),
+                                _hint(
+                                    'Private: not exposed in the provider directory.',
+                                    sem),
+                                if (widget.loadServiceAreas != null) ...[
+                                  const SizedBox(height: 16),
+                                  ServiceLocationFields(
+                                      loadAreas: () async {
+                                        final areas =
+                                            await widget.loadServiceAreas!();
+                                        _coverageOptions = areas;
+                                        return areas;
+                                      },
+                                      multiple: true,
+                                      selected: _coverageAreas,
+                                      onChanged: (areas) => setState(
+                                          () => _coverageAreas = areas),
+                                      pinController: _originPin,
+                                      enabled: !_saving && !_needsReload),
+                                ],
+                              ],
+                            ],
                           ),
-                        ],
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    _sectionCard(
-                      sem: sem,
-                      title: 'Contact & privacy',
-                      subtitle: 'Keep your contact details up to date',
-                      icon: Icons.contact_phone_outlined,
-                      children: [
-                        _validatedField(
-                          label: 'Phone',
-                          controller: _phoneCtrl,
-                          hint: '+60 12 345 6789',
-                          icon: Icons.phone_outlined,
-                          sem: sem,
-                          validator: _validatePhone,
-                          keyboardType: TextInputType.phone,
-                        ),
-                        const SizedBox(height: 8),
-                        _hint('Example: +60 12-345 6789', sem),
-                        const SizedBox(height: 12),
-                        _validatedField(
-                          label: 'Email',
-                          controller: _emailCtrl,
-                          hint: 'name@example.com',
-                          icon: Icons.email_outlined,
-                          sem: sem,
-                          validator: _validateEmail,
-                          keyboardType: TextInputType.emailAddress,
-                          readOnly: _connected,
-                        ),
-                        if (_connected) ...[
-                          const SizedBox(height: 6),
-                          _hint(
-                              'This is your sign-in email. Changing it requires a separate verified email-change flow.',
-                              sem)
-                        ],
-                        const SizedBox(height: 16),
-                        _buildPrivacyToggle(sem),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                    _buildVerificationCard(sem),
-                  ])),
+                          const SizedBox(height: 16),
+                          _sectionCard(
+                            sem: sem,
+                            title: 'Working hours',
+                            subtitle: 'Your default start and end time',
+                            icon: Icons.schedule_outlined,
+                            children: [
+                              if (_connected) ...[
+                                Text(_server!.weeklySummary,
+                                    style: TextStyle(
+                                        color: sem.textPrimary, height: 1.5)),
+                                const SizedBox(height: 10),
+                                OutlinedButton.icon(
+                                    onPressed: _manageConnectedAvailability,
+                                    icon: const Icon(Icons.schedule),
+                                    label: const Text(
+                                        'Manage weekly availability')),
+                                _hint(
+                                    'Times are in Malaysia time (MYT). Saving your profile does not replace working slots.',
+                                    sem),
+                              ] else ...[
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _buildTimePicker(
+                                          'Start',
+                                          _workStart,
+                                          () => _pickTime(isStart: true),
+                                          sem),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    Expanded(
+                                      child: _buildTimePicker('End', _workEnd,
+                                          () => _pickTime(isStart: false), sem),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 10),
+                                _hint(
+                                  'Changing these hours replaces the slots on each active weekday. Use My schedule for different slots or unavailable dates.',
+                                  sem,
+                                ),
+                              ],
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          _sectionCard(
+                            sem: sem,
+                            title: 'Contact & privacy',
+                            subtitle: 'Keep your contact details up to date',
+                            icon: Icons.contact_phone_outlined,
+                            children: [
+                              _validatedField(
+                                label: 'Phone',
+                                controller: _phoneCtrl,
+                                hint: '+60 12 345 6789',
+                                icon: Icons.phone_outlined,
+                                sem: sem,
+                                validator: _validatePhone,
+                                keyboardType: TextInputType.phone,
+                              ),
+                              const SizedBox(height: 8),
+                              _hint('Example: +60 12-345 6789', sem),
+                              const SizedBox(height: 12),
+                              _validatedField(
+                                label: 'Email',
+                                controller: _emailCtrl,
+                                hint: 'name@example.com',
+                                icon: Icons.email_outlined,
+                                sem: sem,
+                                validator: _validateEmail,
+                                keyboardType: TextInputType.emailAddress,
+                                readOnly: _connected,
+                              ),
+                              if (_connected) ...[
+                                const SizedBox(height: 6),
+                                _hint(
+                                    'This is your sign-in email. Changing it requires a separate verified email-change flow.',
+                                    sem)
+                              ],
+                              const SizedBox(height: 16),
+                              _buildPrivacyToggle(sem),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          _buildVerificationCard(sem),
+                        ])),
             ]),
           ),
         ),
@@ -857,6 +930,213 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
       ),
     );
   }
+
+  Widget _buildConnectedForm(SemanticColors sem) => Column(children: [
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              color: sem.primarySurface,
+              border: Border.all(color: sem.primaryBorder),
+              borderRadius: BorderRadius.circular(14)),
+          child:
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Row(children: [
+              CircleAvatar(
+                  radius: 22,
+                  backgroundColor: _avatarColors[_avatarColorIndex],
+                  child: Text(
+                      _nameCtrl.text.trim().isEmpty
+                          ? '?'
+                          : _nameCtrl.text.trim()[0].toUpperCase(),
+                      style: const TextStyle(
+                          color: Colors.white, fontWeight: FontWeight.w700))),
+              const SizedBox(width: 12),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                    Text('Avatar colour',
+                        style: TextStyle(
+                            color: sem.textPrimary,
+                            fontWeight: FontWeight.w600)),
+                    Text(_server!.approvalLabel,
+                        style:
+                            TextStyle(color: sem.textSecondary, fontSize: 12)),
+                  ])),
+              TextButton(
+                  onPressed: () => setState(
+                      () => _appearanceExpanded = !_appearanceExpanded),
+                  child: Text(_appearanceExpanded ? 'Done' : 'Change')),
+            ]),
+            if (_appearanceExpanded) ...[
+              const SizedBox(height: 12),
+              _buildColorPicker()
+            ],
+          ]),
+        ),
+        const SizedBox(height: 16),
+        _sectionCard(
+            sem: sem,
+            title: 'About you',
+            subtitle: '',
+            icon: Icons.person_outline,
+            children: [
+              _validatedField(
+                  label: 'Display name',
+                  controller: _nameCtrl,
+                  hint: 'e.g. Aina Cleaning Services',
+                  icon: Icons.person_outline,
+                  sem: sem,
+                  validator: _validateName,
+                  maxLength: 60,
+                  inputFormatters: [LengthLimitingTextInputFormatter(60)]),
+              const SizedBox(height: 14),
+              _bioField(sem),
+            ]),
+        const SizedBox(height: 16),
+        _sectionCard(
+            sem: sem,
+            title: 'Services & rates',
+            subtitle: '',
+            icon: Icons.cleaning_services_outlined,
+            children: [
+              _hint('Select the services you offer.', sem),
+              const SizedBox(height: 8),
+              _buildServicesChips(sem),
+              const SizedBox(height: 16),
+              _validatedField(
+                  label: 'Hourly rate',
+                  controller: _rateCtrl,
+                  hint: '80.00',
+                  icon: Icons.payments_outlined,
+                  sem: sem,
+                  validator: _validateRate,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  suffix: '/ hour'),
+              const SizedBox(height: 14),
+              _validatedField(
+                  label: '8-hour daily rate',
+                  controller: _dailyCtrl,
+                  hint: '480.00',
+                  icon: Icons.payments_outlined,
+                  sem: sem,
+                  validator: (v) => _validateConnectedRate(
+                      (v ?? '').trim(), _rateCtrl.text.trim()),
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  suffix: '/ 8 hours'),
+              const SizedBox(height: 10),
+              _hint('Offer an hourly rate, a daily rate, or both.', sem),
+              const SizedBox(height: 4),
+              _hint('Existing booking quotes stay the same.', sem),
+            ]),
+        const SizedBox(height: 16),
+        _sectionCard(
+            sem: sem,
+            title: 'Service coverage',
+            subtitle: '',
+            icon: Icons.location_on_outlined,
+            children: [
+              if (widget.loadServiceAreas == null) ...[
+                _validatedField(
+                    label: 'Service area',
+                    controller: _areaCtrl,
+                    hint: 'e.g. Setapak, Kuala Lumpur',
+                    icon: Icons.location_on_outlined,
+                    sem: sem,
+                    validator: (v) => (v ?? '').trim().isEmpty ||
+                            (v ?? '').trim().length > 200
+                        ? 'Enter a service area (max 200 characters)'
+                        : null),
+                const SizedBox(height: 14),
+                _buildStartingAddressField(sem),
+              ] else
+                ServiceLocationFields(
+                  loadAreas: () async {
+                    final areas = await widget.loadServiceAreas!();
+                    _coverageOptions = areas;
+                    return areas;
+                  },
+                  multiple: true,
+                  compact: true,
+                  selected: _coverageAreas,
+                  onChanged: (areas) => setState(() => _coverageAreas = areas),
+                  pinController: _originPin,
+                  enabled: !_saving && !_needsReload,
+                  beforePin: _buildStartingAddressField(sem),
+                ),
+            ]),
+        const SizedBox(height: 16),
+        _sectionCard(
+            sem: sem,
+            title: 'Working hours',
+            subtitle: 'Malaysia time (MYT)',
+            icon: Icons.schedule_outlined,
+            children: [
+              ProviderWorkingHoursSummary(
+                  key: ValueKey(_server!.id), slots: _server!.slots),
+              const SizedBox(height: 12),
+              SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                      onPressed: _manageConnectedAvailability,
+                      icon: const Icon(Icons.schedule, size: 18),
+                      label: const Text('Manage availability'))),
+            ]),
+        const SizedBox(height: 16),
+        _sectionCard(
+            sem: sem,
+            title: 'Contact & privacy',
+            subtitle: '',
+            icon: Icons.contact_phone_outlined,
+            children: [
+              _validatedField(
+                  label: 'Phone',
+                  controller: _phoneCtrl,
+                  hint: '+60 12-345 6789',
+                  icon: Icons.phone_outlined,
+                  sem: sem,
+                  validator: _validatePhone,
+                  keyboardType: TextInputType.phone),
+              const SizedBox(height: 6),
+              _hint(
+                  _showPhoneToOwners
+                      ? 'Required when phone sharing is on.'
+                      : 'Optional while phone sharing is off.',
+                  sem),
+              const SizedBox(height: 14),
+              _validatedField(
+                  label: 'Email',
+                  controller: _emailCtrl,
+                  hint: 'name@example.com',
+                  icon: Icons.email_outlined,
+                  sem: sem,
+                  validator: _validateEmail,
+                  keyboardType: TextInputType.emailAddress,
+                  readOnly: true),
+              const SizedBox(height: 6),
+              _hint('Sign-in email · read only', sem),
+              const SizedBox(height: 16),
+              _buildPrivacyToggle(sem),
+            ]),
+      ]);
+
+  Widget _buildStartingAddressField(SemanticColors sem) =>
+      Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        _validatedField(
+            label: 'Private starting address',
+            controller: _originCtrl,
+            hint: 'e.g. 18 Jalan Setapak, Kuala Lumpur',
+            icon: Icons.lock_outline,
+            sem: sem,
+            validator: (v) =>
+                (v ?? '').trim().isEmpty || (v ?? '').trim().length > 500
+                    ? 'Enter your starting address (max 500 characters)'
+                    : null),
+        const SizedBox(height: 6),
+        _hint('Your starting address stays private.', sem),
+      ]);
 
   Widget _hint(String text, SemanticColors sem) => Text(
         text,
@@ -990,7 +1270,9 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
           Container(
             key: ValueKey('profile-section-header-$title'),
             width: double.infinity,
-            padding: const EdgeInsets.fromLTRB(18, 15, 18, 15),
+            padding: _connected
+                ? const EdgeInsets.fromLTRB(16, 10, 16, 10)
+                : const EdgeInsets.fromLTRB(18, 15, 18, 15),
             color: headerColor,
             child: Row(
               children: [
@@ -1014,12 +1296,13 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
                             fontWeight: FontWeight.w700,
                             color: sem.textPrimary,
                           )),
-                      Text(subtitle,
-                          style: TextStyle(
-                            fontSize: 12,
-                            height: 1.3,
-                            color: sem.textSecondary,
-                          )),
+                      if (subtitle.isNotEmpty)
+                        Text(subtitle,
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.3,
+                              color: sem.textSecondary,
+                            )),
                     ],
                   ),
                 ),
@@ -1084,15 +1367,16 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
           const SizedBox(height: 8),
           _buildColorPicker(),
           const SizedBox(height: 10),
-          if (!_connected) TextButton.icon(
-            onPressed: _pickAvatar,
-            icon: const Icon(Icons.add_photo_alternate_outlined, size: 17),
-            label: Text(_connected
-                ? 'Photo upload not connected'
-                : hasImage
-                    ? 'Change photo'
-                    : 'Preview photo'),
-          ),
+          if (!_connected)
+            TextButton.icon(
+              onPressed: _pickAvatar,
+              icon: const Icon(Icons.add_photo_alternate_outlined, size: 17),
+              label: Text(_connected
+                  ? 'Photo upload not connected'
+                  : hasImage
+                      ? 'Change photo'
+                      : 'Preview photo'),
+            ),
           if (hasImage)
             TextButton.icon(
               onPressed: _clearAvatarImage,
@@ -1142,11 +1426,16 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
           inputFormatters: inputFormatters,
           decoration: InputDecoration(
             hintText: hint,
-            prefixIcon: Icon(icon, size: 19),
+            prefixIcon: (_connected && label.contains('rate'))
+                ? null
+                : Icon(icon, size: 19),
+            prefixText: (_connected && label.contains('rate')) ? 'RM ' : null,
+            suffixIcon:
+                readOnly ? const Icon(Icons.lock_outline, size: 17) : null,
             suffixText: suffix,
             counterText: '',
             filled: true,
-            fillColor: sem.surfaceAlt,
+            fillColor: _connected && !readOnly ? sem.surface : sem.surfaceAlt,
           ),
         ),
       ],
@@ -1170,7 +1459,9 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
           maxLines: 3,
           maxLength: _bioMaxLength,
           decoration: InputDecoration(
-            hintText: 'Tell owners about your service...',
+            hintText: _connected
+                ? 'e.g. Standard and deep cleaning for rental units.'
+                : 'Tell owners about your service...',
             filled: true,
             fillColor: sem.surfaceAlt,
           ),
@@ -1336,8 +1627,8 @@ class _ProviderEditProfileScreenState extends State<ProviderEditProfileScreen> {
                 Text(
                   _connected
                       ? (_showPhoneToOwners
-                          ? 'Only owners of Accepted or In Progress bookings can retrieve your number.'
-                          : 'Phone sharing is off. Booking chat remains available.')
+                          ? 'Only for accepted or ongoing bookings.'
+                          : 'Off · owners use booking chat.')
                       : _showPhoneToOwners
                           ? 'Owners see your phone and can call you.'
                           : 'Phone hidden. Owners can only contact via in-app chat.',

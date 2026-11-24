@@ -15,6 +15,8 @@ import 'package:flutter/material.dart';
 import '../models/demo_data.dart';
 import '../theme/app_theme.dart';
 import '../widgets/section_header.dart';
+import '../widgets/provider_working_hours_summary.dart';
+import '../widgets/profile_sign_out_confirmation.dart';
 import '../services/backend/provider_profile_snapshot.dart';
 
 class ProviderProfileScreen extends StatelessWidget {
@@ -51,8 +53,9 @@ class ProviderProfileScreen extends StatelessWidget {
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
-            expandedHeight: (connected ? 280 : 200) +
-                (MediaQuery.textScalerOf(context).scale(1) - 1) * 260,
+            expandedHeight: (connected ? 160 : 200) +
+                (MediaQuery.textScalerOf(context).scale(1) - 1) *
+                    (connected ? 180 : 260),
             pinned: true,
             backgroundColor: heroColorFinal,
             foregroundColor: Colors.white,
@@ -62,10 +65,6 @@ class ProviderProfileScreen extends StatelessWidget {
                         onPressed: onRefresh,
                         tooltip: 'Refresh profile',
                         icon: const Icon(Icons.refresh)),
-                    IconButton(
-                        onPressed: onEdit,
-                        tooltip: 'Edit profile',
-                        icon: const Icon(Icons.edit_outlined)),
                   ]
                 : null,
             flexibleSpace: FlexibleSpaceBar(
@@ -83,7 +82,7 @@ class ProviderProfileScreen extends StatelessWidget {
                 child: SafeArea(
                   child: Padding(
                     padding: connected
-                        ? const EdgeInsets.fromLTRB(20, 64, 20, 20)
+                        ? const EdgeInsets.fromLTRB(16, 64, 16, 12)
                         : const EdgeInsets.fromLTRB(20, 16, 20, 56),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -91,8 +90,8 @@ class ProviderProfileScreen extends StatelessWidget {
                         Row(
                           children: [
                             Container(
-                              width: 56,
-                              height: 56,
+                              width: connected ? 48 : 56,
+                              height: connected ? 48 : 56,
                               decoration: BoxDecoration(
                                 color: connected
                                     ? const [
@@ -192,50 +191,52 @@ class ProviderProfileScreen extends StatelessWidget {
                               ),
                           ],
                         ),
-                        const Spacer(),
-                        Row(
-                          children: [
-                            _heroStat(
-                              label: 'Rating',
-                              value: connected
-                                  ? (snapshot!.rating?.toStringAsFixed(1) ??
-                                      '—')
-                                  : provider.rating.toStringAsFixed(1),
-                              sub: '/ 5.0',
-                            ),
-                            const SizedBox(width: 12),
-                            _heroStat(
-                              label: connected ? 'Jobs done' : 'Distance',
-                              value: connected
-                                  ? '${snapshot!.completed}'
-                                  : provider.distanceKm.toStringAsFixed(1),
-                              sub: connected ? 'completed' : 'km away',
-                            ),
-                            const SizedBox(width: 12),
-                            _heroStat(
-                              label: provider.hasRankingBreakdown
-                                  ? 'Match'
-                                  : 'Rate',
-                              value: connected
-                                  ? (snapshot!.hourly != null
-                                      ? 'RM ${snapshot!.hourly!.toStringAsFixed(2)}'
-                                      : snapshot!.daily != null
-                                          ? 'RM ${snapshot!.daily!.toStringAsFixed(2)}'
-                                          : '—')
-                                  : provider.hasRankingBreakdown
-                                      ? '${(provider.score * 100).round()}%'
-                                      : 'RM ${provider.hourlyRate.toStringAsFixed(0)}',
-                              sub: connected
-                                  ? (snapshot!.hourly != null
-                                      ? '/ hour'
-                                      : '/ 8 hours')
-                                  : provider.hasRankingBreakdown
-                                      ? 'request score'
-                                      : '/ hour',
-                              highlight: provider.hasRankingBreakdown,
-                            ),
-                          ],
-                        ),
+                        if (!connected) ...[
+                          const Spacer(),
+                          Row(
+                            children: [
+                              _heroStat(
+                                label: 'Rating',
+                                value: connected
+                                    ? (snapshot!.rating?.toStringAsFixed(1) ??
+                                        '—')
+                                    : provider.rating.toStringAsFixed(1),
+                                sub: '/ 5.0',
+                              ),
+                              const SizedBox(width: 12),
+                              _heroStat(
+                                label: connected ? 'Jobs done' : 'Distance',
+                                value: connected
+                                    ? '${snapshot!.completed}'
+                                    : provider.distanceKm.toStringAsFixed(1),
+                                sub: connected ? 'completed' : 'km away',
+                              ),
+                              const SizedBox(width: 12),
+                              _heroStat(
+                                label: provider.hasRankingBreakdown
+                                    ? 'Match'
+                                    : 'Rate',
+                                value: connected
+                                    ? (snapshot!.hourly != null
+                                        ? 'RM ${snapshot!.hourly!.toStringAsFixed(2)}'
+                                        : snapshot!.daily != null
+                                            ? 'RM ${snapshot!.daily!.toStringAsFixed(2)}'
+                                            : '—')
+                                    : provider.hasRankingBreakdown
+                                        ? '${(provider.score * 100).round()}%'
+                                        : 'RM ${provider.hourlyRate.toStringAsFixed(0)}',
+                                sub: connected
+                                    ? (snapshot!.hourly != null
+                                        ? '/ hour'
+                                        : '/ 8 hours')
+                                    : provider.hasRankingBreakdown
+                                        ? 'request score'
+                                        : '/ hour',
+                                highlight: provider.hasRankingBreakdown,
+                              ),
+                            ],
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -254,55 +255,75 @@ class ProviderProfileScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _buildMatchCard(context),
+                  if (connected) ...[
+                    _buildProfileActions(),
+                    const SizedBox(height: 16),
+                  ],
+                  connected
+                      ? _buildServiceProfileCard(context)
+                      : _buildMatchCard(context),
                   const SizedBox(height: 16),
                   _buildStatsCard(context),
                   const SizedBox(height: 16),
-                  _buildServicesCard(context),
-                  const SizedBox(height: 16),
+                  if (!connected) ...[
+                    _buildServicesCard(context),
+                    const SizedBox(height: 16),
+                  ],
                   _buildWorkloadCard(context),
                   const SizedBox(height: 16),
                   _buildContactCard(context),
-                  const SizedBox(height: 24),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: connected
-                              ? onManageAvailability
-                              : () {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                          'Messaging opens after a booking is accepted.'),
-                                      behavior: SnackBarBehavior.floating,
-                                    ),
-                                  );
-                                },
-                          icon: Icon(
-                              connected
-                                  ? Icons.schedule
-                                  : Icons.chat_bubble_outline,
-                              size: 16),
-                          label: Text(connected ? 'Availability' : 'Message'),
-                        ),
-                      ),
-                      if (onSelect != null || connected) ...[
-                        const SizedBox(width: 8),
+                  if (!connected) const SizedBox(height: 24),
+                  if (!connected)
+                    Row(
+                      children: [
                         Expanded(
-                          child: FilledButton.icon(
-                            onPressed: connected ? onEdit : onSelect,
+                          child: OutlinedButton.icon(
+                            onPressed: connected
+                                ? onManageAvailability
+                                : () {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                            'Messaging opens after a booking is accepted.'),
+                                        behavior: SnackBarBehavior.floating,
+                                      ),
+                                    );
+                                  },
                             icon: Icon(
-                                connected ? Icons.edit_outlined : Icons.check,
+                                connected
+                                    ? Icons.schedule
+                                    : Icons.chat_bubble_outline,
                                 size: 16),
-                            label: Text(
-                                connected ? 'Edit profile' : 'Select provider'),
+                            label: Text(connected ? 'Availability' : 'Message'),
                           ),
                         ),
+                        if (onSelect != null || connected) ...[
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: connected ? onEdit : onSelect,
+                              icon: Icon(
+                                  connected ? Icons.edit_outlined : Icons.check,
+                                  size: 16),
+                              label: Text(connected
+                                  ? 'Edit profile'
+                                  : 'Select provider'),
+                            ),
+                          ),
+                        ],
                       ],
-                    ],
-                  ),
+                    ),
                   if (onSettings != null) ...[
+                    if (!connected) ...[
+                      const SizedBox(height: 24),
+                      const SectionHeader(title: 'Personal details'),
+                      Card(
+                          child: ListTile(
+                              leading: const Icon(Icons.person_outline),
+                              title: const Text('Edit profile'),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => onSettings!('edit_profile'))),
+                    ],
                     const SizedBox(height: 24),
                     const SectionHeader(title: 'Preferences'),
                     Card(
@@ -310,10 +331,9 @@ class ProviderProfileScreen extends StatelessWidget {
                       ListTile(
                           leading: const Icon(Icons.notifications_outlined),
                           title: const Text('Notifications'),
-                          subtitle:
-                              const Text('Unread indicators on this device'),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => onSettings!('notifications')),
+                      const Divider(height: 1),
                       ListTile(
                           leading: const Icon(Icons.brightness_auto_outlined),
                           title: const Text('Appearance'),
@@ -321,6 +341,16 @@ class ProviderProfileScreen extends StatelessWidget {
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => onSettings!('appearance')),
                     ])),
+                    const SizedBox(height: 16),
+                    const SectionHeader(title: 'Activity & reports'),
+                    Card(
+                        child: ListTile(
+                            leading: const Icon(Icons.insights_outlined),
+                            title: const Text('My statistics'),
+                            subtitle:
+                                const Text('Completed jobs and work trends'),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => onSettings!('stats'))),
                     const SizedBox(height: 16),
                     const SectionHeader(title: 'Account & help'),
                     Card(
@@ -330,11 +360,23 @@ class ProviderProfileScreen extends StatelessWidget {
                           title: const Text('Privacy & security'),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => onSettings!('privacy')),
+                      const Divider(height: 1),
                       ListTile(
                           leading: const Icon(Icons.help_outline),
                           title: const Text('About & help'),
                           trailing: const Icon(Icons.chevron_right),
                           onTap: () => onSettings!('about')),
+                      const Divider(height: 1),
+                      ListTile(
+                          leading: Icon(Icons.logout,
+                              color: Theme.of(context).colorScheme.error),
+                          title: Text('Sign out',
+                              style: TextStyle(
+                                  color: Theme.of(context).colorScheme.error)),
+                          onTap: () => confirmProfileSignOut(
+                                context,
+                                () => onSettings!('sign-out'),
+                              )),
                     ])),
                   ],
                   const SizedBox(height: 24),
@@ -346,6 +388,94 @@ class ProviderProfileScreen extends StatelessWidget {
       ),
     );
   }
+
+  Widget _buildProfileDetailRow(
+      BuildContext context, String label, String value) {
+    final sem = SemanticColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Expanded(
+            flex: 2,
+            child: Text(label, style: TextStyle(color: sem.textSecondary))),
+        const SizedBox(width: 12),
+        Expanded(
+            flex: 3,
+            child: Text(value,
+                style: TextStyle(
+                    color: sem.textPrimary, fontWeight: FontWeight.w600))),
+      ]),
+    );
+  }
+
+  Widget _buildServiceProfileCard(BuildContext context) {
+    final sem = SemanticColors.of(context);
+    return Card(
+        child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SectionHeader(title: 'Service profile'),
+                const SizedBox(height: 10),
+                Text(
+                    snapshot!.bio.isEmpty
+                        ? 'No introduction added yet.'
+                        : snapshot!.bio,
+                    style: TextStyle(color: sem.textPrimary)),
+                const SizedBox(height: 10),
+                _buildProfileDetailRow(context, 'Service area', snapshot!.area),
+                _buildProfileDetailRow(
+                    context,
+                    'Hourly rate',
+                    snapshot!.hourly == null
+                        ? 'Not offered'
+                        : 'RM ${snapshot!.hourly!.toStringAsFixed(2)} / hour'),
+                _buildProfileDetailRow(
+                    context,
+                    'Daily rate',
+                    snapshot!.daily == null
+                        ? 'Not offered'
+                        : 'RM ${snapshot!.daily!.toStringAsFixed(2)} / 8 hours'),
+                const Divider(height: 24),
+                Text('Services offered',
+                    style: TextStyle(color: sem.textSecondary)),
+                const SizedBox(height: 8),
+                if (provider.serviceTypes.isEmpty)
+                  Text('No services selected yet.',
+                      style: TextStyle(color: sem.textSecondary)),
+                Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: provider.serviceTypes
+                        .map((service) => Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                  color: sem.primarySurface,
+                                  borderRadius: BorderRadius.circular(6)),
+                              child: Text(_serviceLabel(service),
+                                  style: TextStyle(
+                                      color: sem.textPrimary, fontSize: 12)),
+                            ))
+                        .toList()),
+              ],
+            )));
+  }
+
+  Widget _buildProfileActions() => Row(children: [
+        Expanded(
+            child: FilledButton.icon(
+                onPressed: onEdit,
+                icon: const Icon(Icons.edit_outlined, size: 16),
+                label: const Text('Edit profile'))),
+        const SizedBox(width: 8),
+        Expanded(
+            child: OutlinedButton.icon(
+                onPressed: onManageAvailability,
+                icon: const Icon(Icons.schedule, size: 16),
+                label: const Text('Availability'))),
+      ]);
 
   String _initials(String name) {
     final parts = name.trim().split(RegExp(r'\s+'));
@@ -565,7 +695,7 @@ class ProviderProfileScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const SectionHeader(title: 'Lifetime stats'),
+            SectionHeader(title: connected ? 'Work summary' : 'Lifetime stats'),
             const SizedBox(height: 12),
             Row(
               children: [
@@ -584,9 +714,11 @@ class ProviderProfileScreen extends StatelessWidget {
                     Icons.star,
                     Theme.of(context).colorScheme.secondary,
                     sem),
-                const SizedBox(width: 8),
-                _statTile(connected ? '—' : '96%', 'On time', Icons.access_time,
-                    Theme.of(context).colorScheme.primary, sem),
+                if (!connected) ...[
+                  const SizedBox(width: 8),
+                  _statTile('96%', 'On time', Icons.access_time,
+                      Theme.of(context).colorScheme.primary, sem),
+                ],
               ],
             ),
           ],
@@ -699,17 +831,14 @@ class ProviderProfileScreen extends StatelessWidget {
                     const SectionHeader(title: 'Current workload'),
                     const SizedBox(height: 12),
                     Text(
-                        '${snapshot!.active} accepted or in-progress jobs overlap the next 7 days.',
+                        '${snapshot!.active} active job${snapshot!.active == 1 ? '' : 's'} · next 7 days',
                         style: TextStyle(color: sem.textPrimary)),
                     const SizedBox(height: 8),
                     Text('Working hours (MYT)',
                         style: TextStyle(color: sem.textSecondary)),
                     const SizedBox(height: 8),
-                    Text(snapshot!.weeklySummary,
-                        style: TextStyle(color: sem.textPrimary, height: 1.5)),
-                    const SizedBox(height: 8),
-                    Text('On-time performance is not measured yet.',
-                        style: TextStyle(color: sem.textSecondary)),
+                    ProviderWorkingHoursSummary(
+                        key: ValueKey(snapshot!.id), slots: snapshot!.slots),
                   ])));
     // PP4: themed workload color
     final color = provider.workload == 'Low'
@@ -788,7 +917,7 @@ class ProviderProfileScreen extends StatelessWidget {
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const SectionHeader(title: 'Contact'),
+                    const SectionHeader(title: 'Contact & privacy'),
                     const SizedBox(height: 12),
                     _contactRow(Icons.phone, 'Your phone',
                         snapshot!.contact ?? 'Not provided'),
@@ -796,8 +925,8 @@ class ProviderProfileScreen extends StatelessWidget {
                     _contactRow(Icons.email, 'Sign-in email', snapshot!.email),
                     const SizedBox(height: 12),
                     Text(snapshot!.sharePhone
-                        ? 'Phone sharing is enabled for owners of Accepted or In Progress bookings.'
-                        : 'Phone sharing is off. Your own number remains visible here.'),
+                        ? 'Phone shared only with owners of accepted or ongoing bookings.'
+                        : 'Phone hidden from owners.'),
                   ])));
     return Card(
       child: Padding(

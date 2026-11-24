@@ -94,6 +94,7 @@ class WorkspaceProperties extends StatelessWidget {
                       if (!context.mounted || !propertyBinding.valid) return;
                       await Navigator.of(context).push<bool>(MaterialPageRoute(
                           builder: (_) => ConnectedPropertyFormScreen(
+                              loadServiceAreas: backend.owner.locations.areas,
                               loadBuildingOptions: backend.owner.properties,
                               initial: SupabaseWorkspaceRepository
                                   .propertyPresentation(fresh,
@@ -102,17 +103,22 @@ class WorkspaceProperties extends StatelessWidget {
                               onSave: (input) async {
                                 if (!propertyBinding.valid)
                                   throw StateError('Session changed');
-                                await repo.saveProperty(property.id,
-                                    fresh['property_revision'] as int, {
-                                  'unit_name': input.unitName,
-                                  'building_name': input.buildingName,
-                                  'address': input.address,
-                                  'bedrooms': input.bedrooms,
-                                  'size_sqft': input.sizeSqft,
-                                  'cleaning_window_start':
-                                      input.cleaningWindowStart,
-                                  'cleaning_window_end': input.cleaningWindowEnd
-                                });
+                                await repo.saveProperty(
+                                    property.id,
+                                    fresh['property_revision'] as int,
+                                    {
+                                      'unit_name': input.unitName,
+                                      'building_name': input.buildingName,
+                                      'address': input.address,
+                                      'bedrooms': input.bedrooms,
+                                      'size_sqft': input.sizeSqft,
+                                      'cleaning_window_start':
+                                          input.cleaningWindowStart,
+                                      'cleaning_window_end':
+                                          input.cleaningWindowEnd
+                                    },
+                                    areaId: input.areaId,
+                                    pinLink: input.pinLink);
                               })));
                       if (propertyBinding.valid)
                         await propertyBinding.refresh();

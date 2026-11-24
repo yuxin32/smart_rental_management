@@ -49,6 +49,7 @@ Future<TimeOfDay?> showTimeSlotPicker({
   String description = 'All times are in Malaysia time (MYT, UTC+8).',
   int firstMinute = 0,
   int lastMinute = 1439,
+  bool Function(int)? isSelectable,
 }) async {
   final minute = await showMinuteTimeSlotPicker(
     context: context,
@@ -57,6 +58,7 @@ Future<TimeOfDay?> showTimeSlotPicker({
     description: description,
     firstMinute: firstMinute,
     lastMinute: math.min(lastMinute, 1439),
+    isSelectable: isSelectable,
   );
   return minute == null
       ? null
@@ -72,6 +74,7 @@ Future<int?> showMinuteTimeSlotPicker({
   String description = 'All times are in Malaysia time (MYT, UTC+8).',
   int firstMinute = 0,
   int lastMinute = 1439,
+  bool Function(int)? isSelectable,
 }) {
   FocusManager.instance.primaryFocus?.unfocus();
   return showModalBottomSheet<int>(
@@ -85,6 +88,7 @@ Future<int?> showMinuteTimeSlotPicker({
       initialMinute: initialMinute,
       firstMinute: firstMinute,
       lastMinute: lastMinute,
+      isSelectable: isSelectable,
     ),
   );
 }
@@ -97,6 +101,7 @@ class TimeSlotPicker extends StatefulWidget {
     this.description = 'All times are in Malaysia time (MYT, UTC+8).',
     this.firstMinute = 0,
     this.lastMinute = 1439,
+    this.isSelectable,
   });
 
   final String title;
@@ -104,6 +109,7 @@ class TimeSlotPicker extends StatefulWidget {
   final int initialMinute;
   final int firstMinute;
   final int lastMinute;
+  final bool Function(int)? isSelectable;
 
   @override
   State<TimeSlotPicker> createState() => _TimeSlotPickerState();
@@ -304,8 +310,14 @@ class _TimeSlotPickerState extends State<TimeSlotPicker> {
                                                           ? colors.onPrimary
                                                           : colors.onSurface,
                                                     ),
-                                                    onPressed: () =>
-                                                        Navigator.of(context)
+                                                    onPressed: widget
+                                                                .isSelectable
+                                                                ?.call(
+                                                                    minute) ==
+                                                            false
+                                                        ? null
+                                                        : () => Navigator.of(
+                                                                context)
                                                             .pop(minute),
                                                     child: Text(
                                                         timeSlotLabel(minute)),

@@ -11,6 +11,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/device_preferences.dart';
+import 'services/booking_reminder_controller.dart';
+import 'screens/workspace_schedule.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'widgets/connected_route_lifecycle.dart';
@@ -120,6 +122,7 @@ class _RentalAppDemoState extends State<RentalAppDemo>
   StreamSubscription<dynamic>? _authSubscription;
   String? _connectedUserId;
   int _connectedSessionGeneration = 0;
+  bool _connectedWorkspaceOpened = false;
   late ThemeMode _themeMode = kDebugMode &&
           widget.backend == null &&
           widget.localPreviewRole != null &&
@@ -127,6 +130,10 @@ class _RentalAppDemoState extends State<RentalAppDemo>
       ? ThemeMode.dark
       : ThemeMode.light;
   final _devicePreferences = DevicePreferences();
+  BookingReminderController? _reminders;
+  // Replace on auth epochs; a stable key would retain pushed private routes.
+  var _reminderNavigator = GlobalKey<NavigatorState>();
+  bool _reminderNavigationQueued = false;
   bool _themeChosen = false;
   bool _restoringConnectedSession = false;
   bool _recoveryBlocked = false;
@@ -143,10 +150,13 @@ class _RentalAppDemoState extends State<RentalAppDemo>
   final ReviewStore _reviewStore = ReviewStore();
   final MessageStore _messageStore = MessageStore();
   final UserSession _userSession = UserSession();
-  late final _prototypeSupport = PrototypeSupportStore(
-      enabled: widget.backend == null);
+  late final _prototypeSupport =
+      PrototypeSupportStore(enabled: widget.backend == null);
 
   void _syncPrototypeSession() {
+    if (widget.backend != null && _userSession.isLoggedIn) {
+      _connectedWorkspaceOpened = true;
+    }
     final account = !_userSession.isLoggedIn
         ? null
         : widget.backend != null
@@ -154,6 +164,13 @@ class _RentalAppDemoState extends State<RentalAppDemo>
             : 'local:${_userSession.role.name}:${_userSession.email.toLowerCase()}';
     _prototypeSupport.bindSession(account);
     unawaited(_devicePreferences.bindAccount(account));
+    unawaited(_reminders?.bindAccount(
+          _userSession.isLoggedIn && _userSession.role == UserRole.provider
+              ? account
+              : null,
+          widget.backend?.config?.projectRef,
+        ) ??
+        Future<void>.value());
   }
 
   @override
@@ -163,6 +180,8 @@ class _RentalAppDemoState extends State<RentalAppDemo>
     _userSession.addListener(_syncPrototypeSession);
     _restoreAppearance();
     if (widget.backend != null) {
+      _reminders = BookingReminderController.connected(widget.backend!);
+      _reminders!.addListener(_openReminderSchedule);
       _recoveryBlocked = widget.backend!.recovery?.blocksWorkspace ?? false;
       widget.backend!.recovery?.addListener(_onRecoveryChanged);
       _connectedUserId = widget.backend!.client.auth.currentUser?.id;
@@ -204,9 +223,14 @@ class _RentalAppDemoState extends State<RentalAppDemo>
       _clearDecodedImages();
       WidgetsBinding.instance
           .addPostFrameCallback((_) => _clearDecodedImages());
+      // A sign-in can be rejected after Supabase issues a session. Keep the
+      // login form mounted so it can show the reason for the rejection.
+      if (!_connectedWorkspaceOpened && !_restoringConnectedSession) return;
+      _connectedWorkspaceOpened = false;
       _userSession.signOut();
       setState(() {
         ++_connectedSessionGeneration;
+        _reminderNavigator = GlobalKey<NavigatorState>();
         _restoringConnectedSession = false;
       });
     }
@@ -218,11 +242,13 @@ class _RentalAppDemoState extends State<RentalAppDemo>
     widget.backend?.cache.clear();
     widget.backend?.snapshots.clear();
     _clearDecodedImages();
+    _connectedWorkspaceOpened = false;
     _userSession.signOut();
     setState(() {
       _recoveryBlocked = blocked;
       _restoringConnectedSession = false;
       ++_connectedSessionGeneration;
+      _reminderNavigator = GlobalKey<NavigatorState>();
     });
   }
 
@@ -230,6 +256,38 @@ class _RentalAppDemoState extends State<RentalAppDemo>
     PaintingBinding.instance.imageCache.clear();
     PaintingBinding.instance.imageCache.clearLiveImages();
   }
+
+  void _openReminderSchedule() {
+    if (!mounted ||
+        _reminderNavigationQueued ||
+        _recoveryBlocked ||
+        _restoringConnectedSession ||
+        !_userSession.isLoggedIn ||
+        _userSession.role != UserRole.provider) return;
+    _reminderNavigationQueued = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _reminderNavigationQueued = false;
+      if (!mounted ||
+          _recoveryBlocked ||
+          _restoringConnectedSession ||
+          !_userSession.isLoggedIn ||
+          _userSession.role != UserRole.provider) return;
+      final navigator = _reminderNavigator.currentState;
+      if (navigator == null) return;
+      final day = _reminders?.takeOpenRequest();
+      if (day != null)
+        navigator.push(MaterialPageRoute<void>(
+            builder: (_) => WorkspaceSchedule(
+                backend: widget.backend!,
+                role: UserRole.provider,
+                initialDay: day)));
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) =>
+      _reminders?.setActive(state == AppLifecycleState.resumed);
 
   @override
   void didHaveMemoryPressure() {
@@ -251,6 +309,8 @@ class _RentalAppDemoState extends State<RentalAppDemo>
     unawaited(_authSubscription?.cancel() ?? Future<void>.value());
     _userSession.dispose();
     _devicePreferences.dispose();
+    _reminders?.removeListener(_openReminderSchedule);
+    _reminders?.dispose();
     super.dispose();
   }
 
@@ -277,6 +337,8 @@ class _RentalAppDemoState extends State<RentalAppDemo>
     } finally {
       if (mounted && generation == _connectedSessionGeneration) {
         setState(() => _restoringConnectedSession = false);
+        _syncPrototypeSession();
+        _openReminderSchedule();
       }
     }
   }
@@ -319,6 +381,7 @@ class _RentalAppDemoState extends State<RentalAppDemo>
       onToggleTheme: _toggleTheme,
       onSetThemeMode: _setThemeMode,
       devicePreferences: _devicePreferences,
+      reminders: _reminders,
       bookingStore: _bookingStore,
       providerStore: _providerStore,
       propertyStore: _propertyStore,
@@ -332,6 +395,7 @@ class _RentalAppDemoState extends State<RentalAppDemo>
           observer: _routeObserver,
           child: MaterialApp(
             key: ValueKey(_connectedSessionGeneration),
+            navigatorKey: _reminderNavigator,
             navigatorObservers: [_routeObserver],
             title: 'Smart Rental Manager',
             theme: AppTheme.light(),
@@ -437,6 +501,7 @@ class AppProviders extends InheritedWidget {
     this.backend,
     this.prototypeSupport,
     this.devicePreferences,
+    this.reminders,
     this.onSetThemeMode,
     required super.child,
   });
@@ -444,6 +509,7 @@ class AppProviders extends InheritedWidget {
   final ThemeMode themeMode;
   final Future<void> Function(ThemeMode)? onSetThemeMode;
   final DevicePreferences? devicePreferences;
+  final BookingReminderController? reminders;
   final VoidCallback onToggleTheme;
   final BookingStore bookingStore;
   final ProviderStore providerStore;

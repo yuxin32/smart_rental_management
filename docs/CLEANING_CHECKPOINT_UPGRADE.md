@@ -50,4 +50,4 @@ Local results for this change:
 
 ## Remaining integration work
 
-Response-deadline UI/logic, location and alternative-time matching, the weekly-hours editor, calendar/reminders and the latest Profile/Settings polish are separate ports. This checkpoint does not mark them complete. Hosted backup/deployment and two-device UAT also remain outstanding.
+The response-deadline UI/logic, location and alternative-time matching, weekly-hours editor, calendar/reminders and latest Profile/Settings polish have subsequently been ported locally. See [OWNER_PROVIDER_LATEST_UPGRADE.md](OWNER_PROVIDER_LATEST_UPGRADE.md) for the next 048-to-052 package and current verification. Hosted backup/deployment and two-device UAT remain outstanding.

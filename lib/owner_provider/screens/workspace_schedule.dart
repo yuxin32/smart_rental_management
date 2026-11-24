@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../main.dart';
 
 import '../services/backend/schedule_binding.dart';
 import '../services/backend/supabase_backend_provider.dart';
@@ -11,9 +12,10 @@ import 'provider_schedule_screen.dart';
 /// Composition/lifecycle only; original Schedule widgets own their visuals.
 class WorkspaceSchedule extends StatefulWidget {
   const WorkspaceSchedule(
-      {super.key, required this.backend, required this.role});
+      {super.key, required this.backend, required this.role, this.initialDay});
   final SupabaseBackendProvider backend;
   final UserRole role;
+  final DateTime? initialDay;
   @override
   State<WorkspaceSchedule> createState() => _WorkspaceScheduleState();
 }
@@ -26,7 +28,8 @@ class _WorkspaceScheduleState extends State<WorkspaceSchedule>
   void initState() {
     super.initState();
     binding = ScheduleBinding.connected(widget.backend,
-        provider: widget.role == UserRole.provider);
+        provider: widget.role == UserRole.provider,
+        initialDay: widget.initialDay);
     actions = WorkspaceActions(widget.backend, widget.role);
   }
 
@@ -41,6 +44,9 @@ class _WorkspaceScheduleState extends State<WorkspaceSchedule>
   @override
   Widget build(BuildContext context) => widget.role == UserRole.provider
       ? ProviderScheduleScreen(
+          initialDay: widget.initialDay,
+          reminders: AppProviders.maybeOf(context)?.reminders,
+          onReminderSettings: () => actions.settings(context, 'notifications'),
           bottomNavigationBar: actions.providerNavigation(context, 'schedule'),
           providerName: '',
           bookings: const [],

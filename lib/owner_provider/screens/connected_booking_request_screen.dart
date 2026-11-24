@@ -1,5 +1,8 @@
 import '../presentation/workspace_text.dart';
 import 'dart:math' as math;
+import 'package:intl/intl.dart';
+import '../services/backend/service_location.dart';
+import '../widgets/rental_location_editor.dart';
 
 import 'package:flutter/material.dart';
 import '../services/backend/safe_diagnostics.dart';
@@ -35,6 +38,9 @@ class ConnectedBookingRequestScreen extends StatefulWidget {
     required this.findCreatedBooking,
     this.now,
     this.initialPropertyId,
+    this.findMatches,
+    this.loadServiceAreas,
+    this.savePropertyLocation,
   });
 
   final Future<List<Map<String, dynamic>>> Function() loadProperties;
@@ -59,6 +65,14 @@ class ConnectedBookingRequestScreen extends StatefulWidget {
   final Future<String?> Function(String clientRequestId) findCreatedBooking;
   final DateTime Function()? now;
   final String? initialPropertyId;
+  final Future<ProviderSearchResult> Function(
+      {required String propertyId,
+      required String serviceTypeId,
+      required DateTime start,
+      required DateTime end})? findMatches;
+  final Future<List<ServiceAreaOption>> Function()? loadServiceAreas;
+  final Future<void> Function(String id, int revision, String area, String pin)?
+      savePropertyLocation;
 
   @override
   State<ConnectedBookingRequestScreen> createState() =>
@@ -75,6 +89,9 @@ class _ConnectedBookingRequestScreenState
   TimeOfDay? _start;
   TimeOfDay? _end;
   List<EligibleProviderItem>? _eligible;
+  List<AlternativeProviderTime> _alternatives = const [];
+  bool _locationRequired = false;
+  String? _areaName;
   EligibleProviderItem? _selectedProvider;
   DateTime? _searchedStart;
   DateTime? _searchedEnd;
@@ -124,6 +141,8 @@ class _ConnectedBookingRequestScreenState
       update();
       _requestVersion++;
       _eligible = null;
+      _alternatives = const [];
+      _locationRequired = false;
       _selectedProvider = null;
       _requestToken = null;
       _searchedStart = null;
@@ -252,15 +271,26 @@ class _ConnectedBookingRequestScreenState
       _requestToken = null;
     });
     try {
-      final found = await widget.findEligible(
-        propertyId: propertyId,
-        serviceTypeId: serviceTypeId,
-        start: startAt,
-        end: endAt,
-      );
+      final result = widget.findMatches == null
+          ? null
+          : await widget.findMatches!(
+              propertyId: propertyId,
+              serviceTypeId: serviceTypeId,
+              start: startAt,
+              end: endAt);
+      final found = result?.current ??
+          await widget.findEligible(
+            propertyId: propertyId,
+            serviceTypeId: serviceTypeId,
+            start: startAt,
+            end: endAt,
+          );
       if (!mounted || searchVersion != _requestVersion) return;
       setState(() {
         _eligible = found;
+        _alternatives = result?.alternatives ?? const [];
+        _locationRequired = result?.locationRequired ?? false;
+        _areaName = result?.areaName;
         _step = 2;
         _top();
         _searchedStart = startAt;
@@ -347,6 +377,107 @@ class _ConnectedBookingRequestScreenState
     } finally {
       if (mounted) setState(() => _submitting = false);
     }
+  }
+
+  Future<void> _editRentalLocation() async {
+    final id = _propertyId;
+    if (id == null ||
+        widget.loadServiceAreas == null ||
+        widget.savePropertyLocation == null) return;
+    try {
+      final fresh = await widget.loadProperties();
+      if (!mounted) return;
+      final row = fresh.firstWhere((p) => p['property_id'] == id);
+      await showModalBottomSheet<bool>(
+          context: context,
+          isScrollControlled: true,
+          builder: (_) => RentalLocationEditor(
+              location:
+                  Map<String, dynamic>.from(row['location'] as Map? ?? {}),
+              loadAreas: widget.loadServiceAreas!,
+              onSave: (area, pin) => widget.savePropertyLocation!(
+                  id, row['property_revision'] as int, area, pin)));
+      if (mounted)
+        _changed(() {
+          _step = 0;
+          _options = _loadOptions();
+        });
+    } catch (_) {
+      if (mounted)
+        setState(() => _message =
+            'Could not open rental location. Check your connection and retry.');
+    }
+  }
+
+  String _intervalLabel(DateTime start, DateTime end) {
+    final a = start.toUtc().add(const Duration(hours: 8)),
+        b = end.toUtc().add(const Duration(hours: 8));
+    return '${DateFormat('EEE, d MMM yyyy').format(a)} · ${DateFormat('h:mm a').format(a)}–${DateFormat('h:mm a').format(b)} MYT';
+  }
+
+  Future<void> _useAlternative(AlternativeProviderTime offer) async {
+    if (_searching ||
+        _submitting ||
+        _searchedStart == null ||
+        _searchedEnd == null) return;
+    final agreed = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+                scrollable: true,
+                title: const Text('Use this alternative time?'),
+                content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Your selected time'),
+                      const SizedBox(height: 6),
+                      Text(_intervalLabel(_searchedStart!, _searchedEnd!)),
+                      const Divider(height: 28),
+                      const Text('New time'),
+                      const SizedBox(height: 6),
+                      Text(_intervalLabel(offer.start, offer.end),
+                          style: const TextStyle(fontWeight: FontWeight.w700)),
+                      const SizedBox(height: 14),
+                      Text(
+                          'Quoted cleaning fee · RM ${offer.provider.quotedAmount.toStringAsFixed(2)}'),
+                      const SizedBox(height: 10),
+                      const Text(
+                          'Availability and price will be checked again. No request is sent until you review and submit.')
+                    ]),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(c, false),
+                      child: const Text('Keep my time')),
+                  FilledButton(
+                      onPressed: () => Navigator.pop(c, true),
+                      child: const Text('Change time & continue'))
+                ]));
+    if (!mounted || agreed != true) return;
+    final start = offer.start.toUtc().add(const Duration(hours: 8)),
+        end = offer.end.toUtc().add(const Duration(hours: 8));
+    _changed(() {
+      _day = DateTime(start.year, start.month, start.day);
+      _start = TimeOfDay(hour: start.hour, minute: start.minute);
+      _end = TimeOfDay(hour: end.hour, minute: end.minute);
+    });
+    final version = _requestVersion;
+    await _search();
+    if (!mounted || version != _requestVersion || _searchFailed) return;
+    final confirmed = _eligible
+        ?.where((p) => p.providerId == offer.provider.providerId)
+        .firstOrNull;
+    setState(() {
+      if (confirmed == null) {
+        _message =
+            'That alternative is no longer available. Review the latest providers or choose another time.';
+      } else {
+        _selectedProvider = confirmed;
+        _step = 3;
+        _message =
+            'Availability checked again. Review the current quote before sending.';
+        _top();
+      }
+    });
   }
 
   String _timeLabel(TimeOfDay? time) => time == null
@@ -525,6 +656,16 @@ class _ConnectedBookingRequestScreenState
                         onChanged: (value) =>
                             _changed(() => _serviceTypeId = value),
                       ),
+                      if (widget.findMatches != null &&
+                          _propertyId != null) ...[
+                        const SizedBox(height: 12),
+                        Text(
+                            'Rental location: ${((_properties.firstWhere((p) => p['property_id'] == _propertyId)['location'] as Map?)?['area_name'] as String?) ?? 'Choose a rental service area'}'),
+                        TextButton.icon(
+                            onPressed: _editRentalLocation,
+                            icon: const Icon(Icons.location_on_outlined),
+                            label: const Text('Set rental location')),
+                      ],
                       if (_serviceTypeId != null) ...[
                         const SizedBox(height: 12),
                         CleaningServiceScope(
@@ -638,7 +779,13 @@ class _ConnectedBookingRequestScreenState
                     ],
                     if (_step == 2 && _eligible != null) ...[
                       const SizedBox(height: 22),
-                      Text('Eligible when checked · ${_eligible!.length}',
+                      if (widget.findMatches != null) _requestSummary(options),
+                      Text(
+                          widget.findMatches == null
+                              ? 'Eligible when checked · ${_eligible!.length}'
+                              : _locationRequired
+                                  ? 'Rental location required'
+                                  : 'Available at your time · ${_eligible!.length}',
                           style: TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w800,
@@ -646,16 +793,42 @@ class _ConnectedBookingRequestScreenState
                       const SizedBox(height: 5),
                       const Text(
                           'These providers meet the requested service and time checks. Compare their rates and ratings before choosing. The quoted price is checked again when you submit.'),
-                      if (_eligible!.isEmpty)
+                      if (_locationRequired)
+                        ConnectedStatePanel(
+                            state: ConnectedViewState.empty,
+                            title: 'Set your rental location',
+                            message:
+                                'Choose this rental unit’s service area so we can find providers who cover it.',
+                            actionLabel: 'Set rental location',
+                            onAction: _editRentalLocation)
+                      else if (_eligible!.isEmpty)
                         ConnectedStatePanel(
                           state: ConnectedViewState.empty,
                           title: 'No provider available for this time',
                           message:
                               'Try a different service time or cleaning type. You can also check this interval again.',
-                          actionLabel: 'Check again',
-                          onAction: _search,
+                          actionLabel: widget.findMatches == null
+                              ? 'Change date & time'
+                              : null,
+                          onAction: widget.findMatches == null
+                              ? () => setState(() {
+                                    _step = 1;
+                                    _top();
+                                  })
+                              : null,
                         ),
                       ..._eligible!.map(_providerCard),
+                      if (_alternatives.isNotEmpty) ...[
+                        const SizedBox(height: 24),
+                        const Text('Other available times',
+                            style: TextStyle(
+                                fontSize: 18, fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 6),
+                        const Text(
+                            'Suggested within 7 days of your selected date. These providers cover your area but require a time change. Your service and duration stay the same.'),
+                        ..._alternatives.map((offer) =>
+                            _providerCard(offer.provider, alternative: offer)),
+                      ],
                     ],
                     if (_step == 3 && _selectedProvider != null)
                       _reviewCard(options),
@@ -667,7 +840,41 @@ class _ConnectedBookingRequestScreenState
         ),
       ));
 
-  Widget _providerCard(EligibleProviderItem provider) {
+  Widget _requestSummary(_RequestOptions options) {
+    final property =
+        options.properties.firstWhere((p) => p['property_id'] == _propertyId);
+    final service = options.serviceTypes
+        .firstWhere((p) => p['service_type_id'] == _serviceTypeId);
+    return Card(
+        margin: const EdgeInsets.only(bottom: 20),
+        child: Padding(
+            padding: const EdgeInsets.all(16),
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(
+                  '${workspaceText(property['unit_name'] as String)}, ${workspaceText(property['building_name'] as String)}',
+                  style: const TextStyle(fontWeight: FontWeight.w800)),
+              const SizedBox(height: 8),
+              Text(_areaName ??
+                  ((property['location'] as Map?)?['area_name'] as String? ??
+                      'Rental area not set')),
+              const SizedBox(height: 6),
+              Text(service['name'] as String),
+              const SizedBox(height: 6),
+              Text(_intervalLabel(_searchedStart!, _searchedEnd!)),
+              TextButton(
+                  onPressed: _searching
+                      ? null
+                      : () => setState(() {
+                            _step = 1;
+                            _top();
+                          }),
+                  child: const Text('Change date & time')),
+            ])));
+  }
+
+  Widget _providerCard(EligibleProviderItem provider,
+      {AlternativeProviderTime? alternative}) {
     final rates = [
       if (provider.hourlyRate != null) 'RM ${provider.hourlyRate}/hour',
       if (provider.dailyRate != null) 'RM ${provider.dailyRate}/day',
@@ -675,18 +882,33 @@ class _ConnectedBookingRequestScreenState
     final selected = _selectedProvider?.providerId == provider.providerId;
     return Card(
       margin: const EdgeInsets.only(top: 12),
-      color: selected ? const Color(0xFFE9F0FC) : null,
+      color: selected ? Theme.of(context).colorScheme.primaryContainer : null,
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Eligible cleaning provider',
+            Text(
+                provider.displayName?.trim().isNotEmpty == true
+                    ? provider.displayName!
+                    : 'Eligible cleaning provider',
                 style: TextStyle(
                     fontWeight: FontWeight.w800,
                     color: Theme.of(context).colorScheme.primary)),
             const SizedBox(height: 5),
-            Text(provider.serviceArea),
+            Text(
+                _areaName == null ? provider.serviceArea : 'Serves $_areaName'),
+            if (provider.distanceKm != null)
+              Text(
+                  'Approx. ${provider.distanceKm!.toStringAsFixed(1)} km to your rental unit'),
+            if (alternative != null) ...[
+              const SizedBox(height: 10),
+              const Chip(
+                  label: Text('Change time required'),
+                  avatar: Icon(Icons.schedule, size: 16)),
+              Text(_intervalLabel(alternative.start, alternative.end),
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+            ],
             if (provider.bio?.isNotEmpty == true) Text(provider.bio!),
             const SizedBox(height: 7),
             Text(rates),
@@ -703,16 +925,22 @@ class _ConnectedBookingRequestScreenState
                 '${provider.completedJobCount} completed jobs'),
             const SizedBox(height: 8),
             OutlinedButton(
-              onPressed: _submitting
+              onPressed: _submitting || _searching
                   ? null
-                  : () => setState(() {
-                        _selectedProvider = provider;
-                        _step = 3;
-                        _top();
-                        _requestToken = null;
-                        _message = null;
-                      }),
-              child: Text(selected ? 'Selected' : 'Select and review'),
+                  : alternative != null
+                      ? () => _useAlternative(alternative)
+                      : () => setState(() {
+                            _selectedProvider = provider;
+                            _step = 3;
+                            _top();
+                            _requestToken = null;
+                            _message = null;
+                          }),
+              child: Text(alternative != null
+                  ? 'Use this time'
+                  : selected
+                      ? 'Selected'
+                      : 'Select and review'),
             ),
           ],
         ),

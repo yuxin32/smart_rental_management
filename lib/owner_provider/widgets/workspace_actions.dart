@@ -105,7 +105,9 @@ class WorkspaceActions {
   Future<void> statistics(BuildContext context) async {
     if (role != UserRole.provider) return;
     await Navigator.of(context).push<void>(MaterialPageRoute(
-        builder: (_) => WorkspaceReports(backend: backend, provider: true)));
+        builder: (c) => Scaffold(
+            body: WorkspaceReports(backend: backend, provider: true),
+            bottomNavigationBar: providerNavigation(c, 'profile'))));
   }
 
   Future<void> messages(BuildContext context) async =>
@@ -119,6 +121,7 @@ class WorkspaceActions {
       'appearance' => const AppearanceSettingsScreen(),
       'notifications' => NotificationSettingsScreen(
           preferences: app.devicePreferences!,
+          reminders: role == UserRole.provider ? app.reminders : null,
           openNotifications: () => notifications(context)),
       _ => PrivacySecurityScreen(
           email: session.email,
@@ -160,9 +163,12 @@ class WorkspaceActions {
             }))));
   }
 
-  Widget providerNavigation(BuildContext context, String activeId) =>
+  Widget providerNavigation(BuildContext context, String activeId,
+          {bool allowActiveNavigation = false}) =>
       ProviderBottomNav(
-          activeId: activeId, onChange: (id) => providerTab(context, id));
+          activeId: activeId,
+          allowActiveNavigation: allowActiveNavigation,
+          onChange: (id) => providerTab(context, id));
 
   Future<void> providerTab(BuildContext context, String id) async {
     if (role != UserRole.provider) return;
@@ -227,6 +233,9 @@ class WorkspaceActions {
       loadProperties: owner.properties,
       loadServiceTypes: owner.serviceTypes,
       findEligible: owner.eligibleProviders,
+      findMatches: owner.findMatches,
+      loadServiceAreas: owner.locations.areas,
+      savePropertyLocation: owner.savePropertyLocation,
       createPending: backend.bookings.createPending,
       findCreatedBooking: backend.bookings.createdBookingIdForToken,
     );
@@ -237,6 +246,7 @@ class WorkspaceActions {
     final actor = backend.client.auth.currentUser?.id;
     await Navigator.of(context).push<bool>(MaterialPageRoute(
       builder: (_) => ConnectedPropertyFormScreen(
+          loadServiceAreas: backend.owner.locations.areas,
           loadBuildingOptions: backend.owner.properties,
           canSave: () =>
               actor != null && backend.client.auth.currentUser?.id == actor,
@@ -251,6 +261,8 @@ class WorkspaceActions {
               sizeSqft: input.sizeSqft,
               cleaningWindowStart: input.cleaningWindowStart,
               cleaningWindowEnd: input.cleaningWindowEnd,
+              areaId: input.areaId,
+              pinLink: input.pinLink,
             );
           }),
     ));
@@ -260,13 +272,15 @@ class WorkspaceActions {
     if (role != UserRole.provider) return;
     final provider = backend.provider;
     await Navigator.of(context).push<void>(MaterialPageRoute(
-      builder: (_) => ConnectedProviderSetupScreen(
+      builder: (c) => ConnectedProviderSetupScreen(
+        bottomNavigationBar:
+            providerNavigation(c, 'profile', allowActiveNavigation: true),
+        loadWeeklyHours: provider.weeklyState,
+        saveWeeklyHours: provider.replaceWeeklyHours,
+        loadDayOffConstraints: provider.dayOffConstraints,
         initialData: provider.cachedSetup,
         load: provider.loadSetup,
         saveServices: provider.replaceCapabilities,
-        addSlot: (day, start, end) => provider.addWeeklySlot(
-            weekday: day, startTime: start, endTime: end),
-        removeSlot: provider.removeWeeklySlot,
         addUnavailableDate: provider.addUnavailableDate,
         removeUnavailableDate: provider.removeUnavailableDate,
       ),

@@ -53,6 +53,7 @@ class SupabaseWorkspaceRepository {
     final row = await read('my_property', params: {'p_property_id': id});
     propertyPresentation(row);
     if (row['property_id'] != id) throw const FormatException('Wrong property');
+    row['location'] = await backend.owner.locations.property(id);
     return row;
   }
 
@@ -90,14 +91,18 @@ class SupabaseWorkspaceRepository {
         await read('save_my_owner_profile',
             params: {'p_input': input, 'p_revision': revision});
       });
-  Future<void> saveProperty(
-          String id, int revision, Map<String, dynamic> input) =>
+  Future<void> saveProperty(String id, int revision, Map<String, dynamic> input,
+          {String? areaId, String pinLink = ''}) =>
       backend.snapshots.write(() async {
-        final row = await read('save_my_property', params: {
-          'p_property_id': id,
-          'p_revision': revision,
-          'p_input': input
-        });
+        final row = await read(
+            areaId == null ? 'save_my_property' : 'save_located_property',
+            params: {
+              'p_property_id': id,
+              'p_revision': revision,
+              'p_input': input,
+              if (areaId != null) 'p_area_id': areaId,
+              if (areaId != null) 'p_pin_link': pinLink.trim(),
+            });
         if (row['property_id'] != id)
           throw const FormatException('Wrong property');
       });
@@ -128,6 +133,9 @@ class SupabaseWorkspaceRepository {
         address: displayLabels
             ? workspaceText(row['address'] as String)
             : row['address'] as String,
+        locationAreaId: (row['location'] as Map?)?['area_id'] as String?,
+        locationPinLink:
+            (row['location'] as Map?)?['pin_link'] as String? ?? '',
         bedrooms: row['bedrooms'] as int,
         sizeSqft: row['size_sqft'] as int,
         cleaningWindowStart: time('cleaning_window_start'),

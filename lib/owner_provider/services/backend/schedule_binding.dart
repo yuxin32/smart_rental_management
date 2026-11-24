@@ -10,18 +10,23 @@ import 'workspace_binding.dart';
 class ScheduleBinding extends ChangeNotifier {
   ScheduleBinding({
     required DateTime weekStart,
+    bool monthView = false,
     required CursorFeed<Map<String, dynamic>> Function(DateTime, DateTime)
         openFeed,
-  })  : _weekStart = monday(weekStart),
+  })  : _monthView = monthView,
+        _weekStart = monthView
+            ? DateTime.utc(weekStart.year, weekStart.month, 1)
+            : monday(weekStart),
         _openFeed = openFeed {
     _createFeed();
   }
 
   factory ScheduleBinding.connected(SupabaseBackendProvider backend,
-      {required bool provider}) {
+      {required bool provider, DateTime? initialDay}) {
     final userId = backend.client.auth.currentUser?.id;
     return ScheduleBinding(
-        weekStart: malaysiaNow(),
+        weekStart: initialDay ?? malaysiaNow(),
+        monthView: provider,
         openFeed: (start, end) {
           if (userId == null || backend.client.auth.currentUser?.id != userId) {
             throw StateError('Session changed.');
@@ -44,6 +49,11 @@ class ScheduleBinding extends ChangeNotifier {
 
   final CursorFeed<Map<String, dynamic>> Function(DateTime, DateTime) _openFeed;
   DateTime _weekStart;
+  bool _monthView;
+  bool get monthView => _monthView;
+  DateTime get periodEnd => _monthView
+      ? DateTime.utc(_weekStart.year, _weekStart.month + 1, 1)
+      : _weekStart.add(const Duration(days: 7));
   late CursorFeed<Map<String, dynamic>> _feed;
   bool _active = false;
   bool _disposed = false;
@@ -79,7 +89,7 @@ class ScheduleBinding extends ChangeNotifier {
 
   void _createFeed() {
     final start = weekStartUtc(_weekStart);
-    _feed = _openFeed(start, start.add(const Duration(days: 7)));
+    _feed = _openFeed(start, weekStartUtc(periodEnd));
     _feed.addListener(_changed);
     _feed.setActive(_active);
   }
@@ -93,10 +103,23 @@ class ScheduleBinding extends ChangeNotifier {
   void changeWeek(DateTime day) {
     if (_disposed || _sessionEnded) return;
     final next = monday(day);
-    if (next == _weekStart) return;
+    if (next == _weekStart && !_monthView) return;
     _feed.removeListener(_changed);
     _feed.dispose();
     _weekStart = next;
+    _monthView = false;
+    _createFeed();
+    notifyListeners();
+  }
+
+  void changeMonth(DateTime day) {
+    if (_disposed || _sessionEnded) return;
+    final next = DateTime.utc(day.year, day.month, 1);
+    if (next == _weekStart && _monthView) return;
+    _feed.removeListener(_changed);
+    _feed.dispose();
+    _weekStart = next;
+    _monthView = true;
     _createFeed();
     notifyListeners();
   }

@@ -1,7 +1,7 @@
 import '../presentation/workspace_text.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'scheduled_start_button.dart';
+import 'package:intl/intl.dart';
 
 import '../theme/app_theme.dart';
 
@@ -275,6 +275,10 @@ class ConnectedBookingCard extends StatelessWidget {
     final status = row['current_status'] as String? ?? 'Unknown';
     final start =
         DateTime.tryParse(row['requested_start_at']?.toString() ?? '');
+    final timePassed = status == 'Pending' &&
+        start != null &&
+        !start.toUtc().isAfter((now ?? DateTime.now)().toUtc());
+    final canRespond = status == 'Pending' && start != null && !timePassed;
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final statusColor = switch (status) {
@@ -285,23 +289,34 @@ class ConnectedBookingCard extends StatelessWidget {
       'Declined' || 'Cancelled' => isDark ? scheme.error : AppColors.negative,
       _ => Theme.of(context).colorScheme.primary,
     };
-    final nextStep = switch ((isProvider, status)) {
-      (true, 'Pending') => 'Review this request and decide whether to accept.',
-      (true, 'Accepted') => 'Take a Before photo to start cleaning.',
-      (true, 'In Progress') => 'Add completion evidence when cleaning is done.',
-      (false, 'Pending') => 'Waiting for the provider to respond.',
-      (false, 'Accepted') => 'Your provider has confirmed this appointment.',
-      (false, 'In Progress') => 'The cleaning is under way.',
-      (_, 'Completed') => 'Cleaning completed. The record is ready to review.',
-      (_, 'Cancelled') => 'This booking was cancelled.',
-      (_, 'Declined') => 'The provider declined this request.',
-      _ => 'Check the booking status history for updates.',
-    };
+    final nextStep = status == 'Pending' && start == null
+        ? 'The schedule is unavailable. Refresh this booking before responding.'
+        : switch ((isProvider, status)) {
+            (true, 'Pending') =>
+              'Review this request and decide whether to accept.',
+            (true, 'Accepted') => 'Take a Before photo to start cleaning.',
+            (true, 'In Progress') =>
+              'Add completion evidence when cleaning is done.',
+            (false, 'Pending') => 'Waiting for the provider to respond.',
+            (false, 'Accepted') =>
+              'Your provider has confirmed this appointment.',
+            (false, 'In Progress') => 'The cleaning is under way.',
+            (_, 'Completed') =>
+              'Cleaning completed. The record is ready to review.',
+            (_, 'Cancelled') => 'This booking was cancelled.',
+            (_, 'Declined') => 'The provider declined this request.',
+            _ => 'Check the booking status history for updates.',
+          };
     final quoted = row['quoted_amount'];
+    final instructionsLabel = switch ((timePassed, isProvider)) {
+      (true, _) => 'Instructions',
+      (_, true) => 'Owner instructions',
+      _ => 'Your instructions',
+    };
     final bookingLabel = propertyName == null || propertyName!.isEmpty
         ? 'cleaning booking'
         : propertyName!;
-    return Card(
+    final details = Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
         padding: const EdgeInsets.all(17),
@@ -319,6 +334,7 @@ class ConnectedBookingCard extends StatelessWidget {
                   fontWeight: FontWeight.w800,
                 ),
               );
+              if (timePassed) return title;
               final badge = Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -385,99 +401,99 @@ class ConnectedBookingCard extends StatelessWidget {
                 workspaceText(row['instructions'] as String).isNotEmpty) ...[
               const SizedBox(height: 7),
               Text(
-                  '${isProvider ? 'Owner instructions' : 'Your instructions'}: ${workspaceText(row['instructions'] as String)}',
+                  '$instructionsLabel: ${workspaceText(row['instructions'] as String)}',
                   style: TextStyle(color: colors.textSecondary)),
             ],
             if (quoted is num) ...[
               const SizedBox(height: 7),
-              Text('Quoted cleaning fee · RM ${quoted.toStringAsFixed(2)}',
+              Text(
+                  '${timePassed ? 'Quoted fee' : 'Quoted cleaning fee'} · RM ${quoted.toStringAsFixed(2)}',
                   style: TextStyle(
                     color: colors.textPrimary,
                     fontWeight: FontWeight.w600,
                   )),
             ],
-            const SizedBox(height: 12),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: colors.primarySurface,
-                borderRadius: BorderRadius.circular(AppRadius.m),
-              ),
-              child:
-                  Text(nextStep, style: TextStyle(color: colors.textPrimary)),
-            ),
-            const SizedBox(height: 12),
-            if (isProvider && status == 'Pending')
-              _primary(context, 'Accept request', () => onAction('Accepted')),
-            if (isProvider && status == 'Accepted')
-              ScheduledStartButton(
-                start: start,
-                busy: busy,
-                now: now,
-                onStart: onEvidence,
-              ),
-            if (isProvider && status == 'In Progress')
-              _primary(context, 'Add evidence & complete', onEvidence),
-            if (!isProvider && status == 'Completed')
-              _primary(context, 'Review completed service', onEvidence),
-            if (!isProvider && ['Accepted', 'In Progress'].contains(status))
-              _primary(context, 'Message provider', onMessages),
-            if (!isProvider && status == 'Pending') ...[
-              if (onEdit != null) _primary(context, 'Edit request', onEdit!),
-              Text('Messaging opens after the provider accepts.',
-                  style: TextStyle(color: colors.textSecondary)),
-            ],
-            const SizedBox(height: 8),
-            Wrap(spacing: 8, runSpacing: 8, children: [
-              if ((isProvider &&
-                      ['Accepted', 'In Progress'].contains(status)) ||
-                  ['Completed', 'Cancelled', 'Declined'].contains(status))
-                _contextAction(
-                  label: 'Open messages for $bookingLabel',
-                  onTap: onMessages,
-                  child: TextButton.icon(
-                    onPressed: onMessages,
-                    icon: const Icon(Icons.chat_bubble_outline, size: 19),
-                    label: Text(
-                        ['Completed', 'Cancelled', 'Declined'].contains(status)
-                            ? 'View conversation'
-                            : 'Messages'),
-                  ),
-                ),
-              if (status == 'Completed')
-                TextButton.icon(
-                  onPressed: onReview,
-                  icon: const Icon(Icons.star_outline_rounded, size: 19),
-                  label: Text(isProvider ? 'Owner review' : 'Rate cleaning'),
-                ),
-              if (isProvider && status == 'Completed')
-                TextButton.icon(
-                  onPressed: onEvidence,
-                  icon: const Icon(Icons.photo_library_outlined, size: 19),
-                  label: const Text('Evidence'),
-                ),
-              if (isProvider && status == 'Pending')
-                TextButton(
-                  onPressed: busy ? null : () => onAction('Declined'),
-                  child: const Text('Decline'),
-                ),
-            ]),
-            if ((isProvider && status == 'Accepted') ||
-                (!isProvider && ['Pending', 'Accepted'].contains(status))) ...[
+            if (!timePassed) ...[
               const SizedBox(height: 12),
-              SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: busy ? null : onCancel,
-                    style: OutlinedButton.styleFrom(
-                        minimumSize: const Size(0, 48),
-                        foregroundColor: scheme.error,
-                        side:
-                            BorderSide(color: scheme.error.withOpacity(0.55))),
-                    icon: const Icon(Icons.cancel_outlined, size: 19),
-                    label: const Text('Cancel booking'),
-                  )),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: colors.primarySurface,
+                  borderRadius: BorderRadius.circular(AppRadius.m),
+                ),
+                child:
+                    Text(nextStep, style: TextStyle(color: colors.textPrimary)),
+              ),
+              const SizedBox(height: 12),
+              if (isProvider && canRespond)
+                _primary(context, 'Accept request', () => onAction('Accepted')),
+              if (isProvider && status == 'Accepted')
+                ScheduledStartButton(
+                    start: start, busy: busy, now: now, onStart: onEvidence),
+              if (isProvider && status == 'In Progress')
+                _primary(context, 'Add evidence & complete', onEvidence),
+              if (!isProvider && status == 'Completed')
+                _primary(context, 'Review completed service', onEvidence),
+              if (!isProvider && ['Accepted', 'In Progress'].contains(status))
+                _primary(context, 'Message provider', onMessages),
+              if (!isProvider && status == 'Pending') ...[
+                if (onEdit != null) _primary(context, 'Edit request', onEdit!),
+                Text('Messaging opens after the provider accepts.',
+                    style: TextStyle(color: colors.textSecondary)),
+              ],
+              const SizedBox(height: 8),
+              Wrap(spacing: 8, runSpacing: 8, children: [
+                if ((isProvider &&
+                        ['Accepted', 'In Progress'].contains(status)) ||
+                    ['Completed', 'Cancelled', 'Declined'].contains(status))
+                  _contextAction(
+                    label: 'Open messages for $bookingLabel',
+                    onTap: onMessages,
+                    child: TextButton.icon(
+                      onPressed: onMessages,
+                      icon: const Icon(Icons.chat_bubble_outline, size: 19),
+                      label: Text(['Completed', 'Cancelled', 'Declined']
+                              .contains(status)
+                          ? 'View conversation'
+                          : 'Messages'),
+                    ),
+                  ),
+                if (status == 'Completed')
+                  TextButton.icon(
+                    onPressed: onReview,
+                    icon: const Icon(Icons.star_outline_rounded, size: 19),
+                    label: Text(isProvider ? 'Owner review' : 'Rate cleaning'),
+                  ),
+                if (isProvider && status == 'Completed')
+                  TextButton.icon(
+                    onPressed: onEvidence,
+                    icon: const Icon(Icons.photo_library_outlined, size: 19),
+                    label: const Text('Evidence'),
+                  ),
+                if (isProvider && canRespond)
+                  TextButton(
+                    onPressed: busy ? null : () => onAction('Declined'),
+                    child: const Text('Decline'),
+                  ),
+              ]),
+              if ((isProvider && status == 'Accepted') ||
+                  (!isProvider &&
+                      ['Pending', 'Accepted'].contains(status))) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: busy ? null : onCancel,
+                      style: OutlinedButton.styleFrom(
+                          minimumSize: const Size(0, 48),
+                          foregroundColor: scheme.error,
+                          side: BorderSide(
+                              color: scheme.error.withOpacity(0.55))),
+                      icon: const Icon(Icons.cancel_outlined, size: 19),
+                      label: const Text('Cancel booking'),
+                    )),
+              ],
             ],
             const SizedBox(height: 16),
             Divider(color: colors.border),
@@ -489,6 +505,71 @@ class ConnectedBookingCard extends StatelessWidget {
                     style: TextButton.styleFrom(minimumSize: const Size(0, 48)),
                     icon: const Icon(Icons.history, size: 19),
                     label: const Text('Status history'))),
+          ],
+        ),
+      ),
+    );
+    if (!timePassed) return details;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _expiredRequestPanel(context),
+        details,
+      ],
+    );
+  }
+
+  Widget _expiredRequestPanel(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      color: Color.alphaBlend(
+        scheme.error.withOpacity(0.08),
+        SemanticColors.of(context).surface,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.schedule_outlined, color: scheme.error, size: 19),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Request expired',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: scheme.error,
+                          fontWeight: FontWeight.w700,
+                        ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              isProvider
+                  ? 'No action needed. The owner can choose a new time.'
+                  : 'Choose a new time so the provider can respond.',
+            ),
+            if (!isProvider) ...[
+              const SizedBox(height: 12),
+              if (onEdit != null)
+                FilledButton(
+                  onPressed: busy ? null : onEdit,
+                  child: const Text('Reschedule request'),
+                ),
+              const SizedBox(height: 4),
+              TextButton(
+                onPressed: busy ? null : onCancel,
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 48),
+                  foregroundColor: scheme.error,
+                ),
+                child: const Text('Cancel request'),
+              ),
+            ],
           ],
         ),
       ),

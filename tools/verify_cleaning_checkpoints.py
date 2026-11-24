@@ -87,6 +87,7 @@ for profile in ('legacy', 'disabled'):
         acl_sql="""select coalesce(jsonb_object_agg(id,acl),'{}'::jsonb) from (
           select 'f:'||p.oid::text id,coalesce(p.proacl::text,'') acl from pg_proc p
            join pg_namespace n on n.oid=p.pronamespace where n.nspname='public'
+           and p.proname not in ('create_pending_booking','accept_pending_booking')
           union all select 'r:'||c.oid::text,coalesce(c.relacl::text,'') from pg_class c
            join pg_namespace n on n.oid=c.relnamespace where n.nspname='public'
           union all select 'a:'||a.attrelid::text||':'||a.attnum::text,coalesce(a.attacl::text,'')
@@ -94,11 +95,13 @@ for profile in ('legacy', 'disabled'):
            join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and a.attnum>0
            and a.attname<>'before_locked_at_start') s;"""
         before_acl=json.loads(run('psql.exe',connection+['-A','-t','-c',acl_sql],env))
-        upgrade=root/'supabase/deploy/upgrade_owner_cleaning_checkpoints.sql'
-        upgrade_sql=upgrade.read_text(encoding='utf-8')
+        upgrades=[root/'supabase/deploy/upgrade_owner_cleaning_checkpoints.sql']
+        remaining=root/'supabase/deploy/upgrade_remaining_owner_provider.sql'
+        if remaining.exists():upgrades.append(remaining)
+        upgrade_sql='\n'.join(p.read_text(encoding='utf-8') for p in upgrades)
         for migration in migrations[len(baseline):]:
             assert migration.read_text(encoding='utf-8') in upgrade_sql,'Rebuild the upgrade SQL bundle'
-        execute('reviewed 046 -> 048 deployment bundle',path=upgrade)
+        for upgrade in upgrades:execute(upgrade.name,path=upgrade)
         after_acl=json.loads(run('psql.exe',connection+['-A','-t','-c',acl_sql],env))
         assert all(after_acl.get(k)==v for k,v in before_acl.items()),'Existing public ACLs changed'
         execute('migration history',sql="""do $$ begin
@@ -106,6 +109,7 @@ for profile in ('legacy', 'disabled'):
             where version in ('20261123000047','20261123000048'))=2;
         end $$;""")
         tests=['booking_start_time.sql','cleaning_evidence_checkpoints.sql']
+        if remaining.exists():tests+=['location_matching.sql','provider_weekly_hours.sql','pending_response_deadline.sql','module_role_boundaries.sql']
         for test in tests:
             execute(test,path=root/'supabase/tests'/test)
         receipts.append({'profile':profile,'migrations':len(migrations),'tests':tests,'passed':True,

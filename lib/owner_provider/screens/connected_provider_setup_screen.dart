@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import '../services/backend/safe_diagnostics.dart';
 
 import '../features/availability/domain/provider_setup.dart';
@@ -8,13 +9,8 @@ import '../widgets/connected_state_panel.dart';
 import '../widgets/connected_action_feedback.dart';
 import '../widgets/snapshot_refresh_notice.dart';
 import '../services/backend/session_snapshot_cache.dart';
-import '../widgets/time_slot_picker.dart';
-
-typedef AddConnectedSlot = Future<void> Function(
-  int weekday,
-  String startTime,
-  String endTime,
-);
+import '../widgets/provider_weekly_hours_editor.dart';
+import '../theme/app_theme.dart';
 
 /// All reads and writes are delegated to the authenticated backend. No
 /// sample availability or service capability is created in this screen.
@@ -24,19 +20,24 @@ class ConnectedProviderSetupScreen extends StatefulWidget {
     required this.load,
     this.initialData,
     required this.saveServices,
-    required this.addSlot,
-    required this.removeSlot,
+    required this.loadWeeklyHours,
+    required this.saveWeeklyHours,
     required this.addUnavailableDate,
     required this.removeUnavailableDate,
+    required this.loadDayOffConstraints,
+    this.bottomNavigationBar,
   });
 
   final Future<ProviderSetupData> Function() load;
   final ProviderSetupData? initialData;
   final Future<void> Function(Set<String>) saveServices;
-  final AddConnectedSlot addSlot;
-  final Future<void> Function(String) removeSlot;
+  final Future<ProviderWeeklyState> Function() loadWeeklyHours;
+  final SaveProviderWeek saveWeeklyHours;
+  final Widget? bottomNavigationBar;
   final Future<void> Function(String) addUnavailableDate;
   final Future<void> Function(String) removeUnavailableDate;
+  final Future<ProviderDayOffConstraints> Function(DateTime, DateTime)
+      loadDayOffConstraints;
 
   @override
   State<ConnectedProviderSetupScreen> createState() =>
@@ -45,15 +46,6 @@ class ConnectedProviderSetupScreen extends StatefulWidget {
 
 class _ConnectedProviderSetupScreenState
     extends State<ConnectedProviderSetupScreen> {
-  static const _days = [
-    'Monday',
-    'Tuesday',
-    'Wednesday',
-    'Thursday',
-    'Friday',
-    'Saturday',
-    'Sunday',
-  ];
   late Future<ProviderSetupData> _future;
   ProviderSetupData? _last;
   bool _verifying = true;
@@ -61,6 +53,9 @@ class _ConnectedProviderSetupScreenState
   Set<String> _selectedServices = {};
   bool _busy = false;
   bool _needsVerification = false;
+  bool _checkingDates = false;
+  bool _retryDates = false;
+  bool _weeklyBusy = false;
   String? _error;
   ConnectedActionNotice? _notice;
 
@@ -93,6 +88,7 @@ class _ConnectedProviderSetupScreenState
       setState(() {
         if (!keepNotice) _notice = null;
         _error = null;
+        _retryDates = false;
         _needsVerification = false;
         _verifying = true;
         _fresh = false;
@@ -104,9 +100,15 @@ class _ConnectedProviderSetupScreenState
     String working = 'Saving availability',
     String saved = 'Your availability changes were saved to your account.',
   }) async {
-    if (_busy || _needsVerification || _verifying || !_fresh) return;
+    if (_busy ||
+        _weeklyBusy ||
+        _checkingDates ||
+        _needsVerification ||
+        _verifying ||
+        !_fresh) return;
     setState(() {
       _busy = true;
+      _retryDates = false;
       _error = null;
       _notice = ConnectedActionNotice(ConnectedActionState.working, working,
           'Please wait while we check and save your changes.');
@@ -149,47 +151,78 @@ class _ConnectedProviderSetupScreenState
     }
   }
 
-  Future<void> _addSlot(int weekday, List<ProviderWeeklySlotItem> slots) async {
-    final range = await showDialog<(int, int)>(
-      context: context,
-      builder: (_) => _WorkingSlotDialog(
-        weekday: weekday,
-        dayName: _days[weekday - 1],
-        existing: slots,
-      ),
-    );
-    if (!mounted || range == null) return;
-    await _run(() => widget.addSlot(
-          weekday,
-          ProviderSlotRules.databaseTime(range.$1),
-          ProviderSlotRules.databaseTime(range.$2),
-        ));
-  }
-
   Future<void> _addUnavailableDate() async {
-    final now = DateTime.now();
-    final date = await showDatePicker(
-      context: context,
-      initialDate: now,
-      firstDate: DateTime(now.year, now.month, now.day),
-      lastDate: DateTime(now.year + 2),
-      helpText: 'Choose a day you cannot accept cleaning jobs',
-    );
-    if (!mounted || date == null) return;
-    final key = '${date.year.toString().padLeft(4, '0')}-'
-        '${date.month.toString().padLeft(2, '0')}-'
-        '${date.day.toString().padLeft(2, '0')}';
-    final current = await _future;
-    if (!mounted) return;
-    if (current.unavailableDates.contains(key)) {
-      setState(() {
-        _error = 'This date is already unavailable.';
-        _notice = ConnectedActionNotice(
-            ConnectedActionState.error, 'Date already blocked', _error!);
-      });
-      return;
+    if (_busy ||
+        _weeklyBusy ||
+        _checkingDates ||
+        _verifying ||
+        !_fresh ||
+        _needsVerification) return;
+    setState(() {
+      _checkingDates = true;
+      _retryDates = false;
+      _notice = null;
+      _error = null;
+    });
+    try {
+      final now = DateTime.now().toUtc().add(const Duration(hours: 8));
+      final first = DateTime(now.year, now.month, now.day);
+      final last = DateTime(now.year + 2);
+      final constraints = await widget.loadDayOffConstraints(first, last);
+      if (!mounted) return;
+      if (ProviderDayOffConstraints.dateKey(constraints.firstDate) !=
+              ProviderDayOffConstraints.dateKey(first) ||
+          ProviderDayOffConstraints.dateKey(constraints.lastDate) !=
+              ProviderDayOffConstraints.dateKey(last)) {
+        throw StateError('Date range could not be verified.');
+      }
+      DateTime? initial;
+      for (var day = first;
+          !day.isAfter(last);
+          day = DateTime(day.year, day.month, day.day + 1)) {
+        if (constraints.allows(day)) {
+          initial = day;
+          break;
+        }
+      }
+      if (initial == null) {
+        setState(() => _notice = const ConnectedActionNotice(
+            ConnectedActionState.error,
+            'No dates available',
+            'Every date in this calendar already has a confirmed job or a day off.'));
+        return;
+      }
+      setState(() => _checkingDates = false);
+      final date = await showDatePicker(
+        context: context,
+        initialDate: initial,
+        firstDate: first,
+        lastDate: last,
+        currentDate: first,
+        selectableDayPredicate: constraints.allows,
+        helpText: 'Choose an unavailable date',
+        errorInvalidText:
+            'Choose a date without a confirmed job or an existing day off.',
+      );
+      if (!mounted || date == null) return;
+      if (!constraints.allows(date))
+        throw StateError('Date could not be verified.');
+      setState(() => _checkingDates = false);
+      await _run(() =>
+          widget.addUnavailableDate(ProviderDayOffConstraints.dateKey(date)));
+    } catch (error) {
+      SafeDiagnostics.app.record(SafeOperation.providerSetupLoad, error);
+      if (mounted)
+        setState(() {
+          _retryDates = true;
+          _notice = const ConnectedActionNotice(
+              ConnectedActionState.error,
+              'Could not check dates',
+              'Your latest bookings and days off could not be verified. Try again before choosing a date.');
+        });
+    } finally {
+      if (mounted) setState(() => _checkingDates = false);
     }
-    await _run(() => widget.addUnavailableDate(key));
   }
 
   Future<void> _confirmRemoval(
@@ -215,22 +248,65 @@ class _ConnectedProviderSetupScreenState
     if (confirmed == true && mounted) await _run(remove);
   }
 
+  Widget _buildSection(BuildContext context, String title, IconData icon,
+      List<Widget> children) {
+    final sem = SemanticColors.of(context);
+    return Container(
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+          color: sem.surface,
+          border: Border.all(color: sem.border),
+          borderRadius: BorderRadius.circular(18)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Container(
+            key: ValueKey('availability-section-$title'),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            color: Theme.of(context).brightness == Brightness.dark
+                ? sem.primarySurface
+                : sem.primaryBorder,
+            child: Row(children: [
+              Icon(icon,
+                  size: 20, color: Theme.of(context).colorScheme.primary),
+              const SizedBox(width: 10),
+              Expanded(
+                  child: Text(title,
+                      style: TextStyle(
+                          color: sem.textPrimary,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700)))
+            ])),
+        Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: children)),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
+      bottomNavigationBar: widget.bottomNavigationBar,
       appBar: AppBar(
         title: const Text('Services & availability'),
         actions: [
           IconButton(
             tooltip: 'Refresh availability',
-            onPressed: _busy || _verifying ? null : _refresh,
+            onPressed: _busy || _weeklyBusy || _verifying || _checkingDates
+                ? null
+                : _refresh,
             icon: const Icon(Icons.refresh),
           ),
         ],
       ),
       body: ConnectedActionFeedbackFrame(
         notice: _notice,
+        actionLabel: _retryDates ? 'Check dates again' : null,
+        onAction: _retryDates && !_checkingDates && !_busy
+            ? _addUnavailableDate
+            : null,
         onDismiss: _busy ? null : () => setState(() => _notice = null),
         child: FutureBuilder<ProviderSetupData>(
           future: _future,
@@ -280,110 +356,161 @@ class _ConnectedProviderSetupScreenState
                         'Saved availability is read-only until the latest data is verified.')),
               Expanded(
                   child: AbsorbPointer(
-                      absorbing: _verifying || snapshot.hasError,
+                      absorbing:
+                          _verifying || _checkingDates || snapshot.hasError,
                       child: ListView(
+                        key: const PageStorageKey('services-availability-form'),
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
                         children: [
-                          Card(
-                            color: scheme.primaryContainer,
-                            child: const Padding(
-                              padding: EdgeInsets.all(16),
-                              child: Text(
-                                'Select the services you provide, then declare the hours '
-                                'when you can accept a complete cleaning appointment. '
-                                'Changes are saved to your account.',
+                          _buildSection(context, 'Cleaning services',
+                              Icons.cleaning_services_outlined, [
+                            if (data.services.isEmpty)
+                              ConnectedStatePanel(
+                                state: ConnectedViewState.empty,
+                                title: 'No cleaning services available',
+                                message:
+                                    'The service list is empty. Refresh and try again before setting your working hours.',
+                                actionLabel: 'Refresh services',
+                                onAction: _refresh,
                               ),
-                            ),
-                          ),
-                          const SizedBox(height: 16),
-                          Text('Cleaning services',
-                              style: Theme.of(context).textTheme.titleLarge),
-                          const SizedBox(height: 8),
-                          if (data.services.isEmpty)
-                            ConnectedStatePanel(
-                              state: ConnectedViewState.empty,
-                              title: 'No cleaning services available',
-                              message:
-                                  'The service list is empty. Refresh and try again before setting your working hours.',
-                              actionLabel: 'Refresh services',
-                              onAction: _refresh,
-                            ),
-                          for (final service in data.services)
-                            CheckboxListTile(
-                              key: Key('service-${service.name}'),
-                              value: _selectedServices.contains(service.id),
-                              title: Text(service.name),
-                              onChanged: _busy || !_fresh
-                                  ? null
-                                  : (checked) => setState(() {
-                                        _notice = null;
-                                        _error = null;
-                                        if (checked == true) {
-                                          _selectedServices.add(service.id);
-                                        } else {
-                                          _selectedServices.remove(service.id);
-                                        }
-                                      }),
-                            ),
-                          const SizedBox(height: 8),
-                          FilledButton.icon(
-                            onPressed: _busy ||
-                                    !_fresh ||
-                                    data.services.isEmpty ||
-                                    _selectedServices.isEmpty ||
-                                    setEquals(_selectedServices,
-                                        data.selectedServiceIds)
-                                ? null
-                                : () => _run(
-                                      () => widget.saveServices(
-                                          Set.of(_selectedServices)),
-                                      working: 'Saving cleaning services',
-                                      saved:
-                                          'Your selected cleaning services were saved to your account.',
+                            SizedBox(
+                                child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                  for (final service in data.services)
+                                    CheckboxListTile(
+                                      key: Key('service-${service.name}'),
+                                      value: _selectedServices
+                                          .contains(service.id),
+                                      title: Text(service.name,
+                                          style: TextStyle(
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .onSurface)),
+                                      secondary: data
+                                                  .weeklyState?.requiredServices
+                                                  .contains(service.id) ==
+                                              true
+                                          ? const Icon(Icons.lock_outline,
+                                              size: 18)
+                                          : null,
+                                      subtitle: data
+                                                  .weeklyState?.requiredServices
+                                                  .contains(service.id) ==
+                                              true
+                                          ? Text('Used by an upcoming booking',
+                                              style: TextStyle(
+                                                  color: Theme.of(context)
+                                                      .colorScheme
+                                                      .onSurfaceVariant))
+                                          : null,
+                                      onChanged: _busy ||
+                                              _weeklyBusy ||
+                                              !_fresh ||
+                                              data.weeklyState?.requiredServices
+                                                      .contains(service.id) ==
+                                                  true
+                                          ? null
+                                          : (checked) => setState(() {
+                                                _notice = null;
+                                                _error = null;
+                                                if (checked == true) {
+                                                  _selectedServices
+                                                      .add(service.id);
+                                                } else {
+                                                  _selectedServices
+                                                      .remove(service.id);
+                                                }
+                                              }),
                                     ),
-                            icon: const Icon(Icons.save_outlined),
-                            label: const Text('Save service types'),
-                          ),
+                                  const SizedBox(height: 8),
+                                  FilledButton.icon(
+                                    onPressed: _busy ||
+                                            _weeklyBusy ||
+                                            !_fresh ||
+                                            data.services.isEmpty ||
+                                            _selectedServices.isEmpty ||
+                                            setEquals(_selectedServices,
+                                                data.selectedServiceIds)
+                                        ? null
+                                        : () => _run(
+                                              () => widget.saveServices(
+                                                  Set.of(_selectedServices)),
+                                              working:
+                                                  'Saving cleaning services',
+                                              saved:
+                                                  'Your selected cleaning services were saved to your account.',
+                                            ),
+                                    icon: const Icon(Icons.save_outlined),
+                                    label: const Text('Save services'),
+                                  ),
+                                ])),
+                          ]),
                           const SizedBox(height: 26),
-                          Text('Weekly working slots',
-                              style: Theme.of(context).textTheme.titleLarge),
-                          const Text(
-                              'Each slot must be at least 2 hours. Slots may touch, but not overlap.'),
-                          const SizedBox(height: 10),
-                          for (var weekday = 1; weekday <= 7; weekday++)
-                            _dayCard(weekday, data.slots, scheme),
+                          _buildSection(context, 'Weekly working hours',
+                              Icons.schedule_outlined, [
+                            ProviderWeeklyHoursEditor(
+                              key: const ValueKey('provider-weekly-hours'),
+                              data: data,
+                              enabled: _fresh && !_busy && !_checkingDates,
+                              loadFresh: widget.loadWeeklyHours,
+                              save: widget.saveWeeklyHours,
+                              onSaved: () => _refresh(
+                                  preserveServices: true, keepNotice: true),
+                              onBusyChanged: (busy) {
+                                if (mounted) setState(() => _weeklyBusy = busy);
+                              },
+                            ),
+                          ]),
                           const SizedBox(height: 24),
-                          Text('Unavailable dates',
-                              style: Theme.of(context).textTheme.titleLarge),
-                          const Text(
-                              'A blocked date overrides all weekly slots. Confirmed jobs cannot be invalidated.'),
-                          const SizedBox(height: 8),
-                          if (data.unavailableDates.isEmpty)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(vertical: 8),
-                              child: Text('No blocked dates.'),
-                            ),
-                          for (final date
-                              in data.unavailableDates.toList()..sort())
-                            ListTile(
-                              title: Text(date),
-                              trailing: IconButton(
-                                tooltip: 'Remove unavailable date $date',
-                                onPressed: _busy || !_fresh
-                                    ? null
-                                    : () => _confirmRemoval(
-                                        'Remove unavailable date?',
-                                        () =>
-                                            widget.removeUnavailableDate(date)),
-                                icon: const Icon(Icons.close),
+                          _buildSection(
+                              context, 'Days off', Icons.event_busy_outlined, [
+                            const Text(
+                                'One-off dates · weekly hours stay the same.'),
+                            const SizedBox(height: 8),
+                            if (data.unavailableDates.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 8),
+                                child: Text('No days off added.'),
                               ),
+                            for (final date
+                                in data.unavailableDates.toList()..sort())
+                              ListTile(
+                                title: Text(DateFormat('EEE, d MMM yyyy')
+                                    .format(DateTime.parse(date))),
+                                subtitle: const Text('All day'),
+                                trailing: IconButton(
+                                  tooltip: 'Remove unavailable date $date',
+                                  onPressed: _busy || _weeklyBusy || !_fresh
+                                      ? null
+                                      : () => _confirmRemoval(
+                                          'Remove day off?',
+                                          () => widget
+                                              .removeUnavailableDate(date)),
+                                  icon: const Icon(Icons.close),
+                                ),
+                              ),
+                            OutlinedButton.icon(
+                              onPressed: _busy ||
+                                      _weeklyBusy ||
+                                      _checkingDates ||
+                                      _needsVerification ||
+                                      !_fresh
+                                  ? null
+                                  : _addUnavailableDate,
+                              icon: _checkingDates
+                                  ? const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2))
+                                  : const Icon(Icons.event_busy_outlined),
+                              label: Text(_checkingDates
+                                  ? 'Checking dates…'
+                                  : 'Add day off'),
                             ),
-                          OutlinedButton.icon(
-                            onPressed:
-                                _busy || !_fresh ? null : _addUnavailableDate,
-                            icon: const Icon(Icons.event_busy_outlined),
-                            label: const Text('Add unavailable date'),
-                          ),
+                          ]),
                           if (_error != null && _notice == null)
                             Text(_error!,
                                 style: TextStyle(color: scheme.error)),
@@ -395,157 +522,4 @@ class _ConnectedProviderSetupScreenState
       ),
     );
   }
-
-  Widget _dayCard(
-    int weekday,
-    List<ProviderWeeklySlotItem> allSlots,
-    ColorScheme scheme,
-  ) {
-    final slots = allSlots.where((slot) => slot.weekday == weekday).toList()
-      ..sort((a, b) => a.startMinute.compareTo(b.startMinute));
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(_days[weekday - 1],
-                style: const TextStyle(fontWeight: FontWeight.w700)),
-            if (slots.isEmpty)
-              Text('No working hours',
-                  style: TextStyle(color: scheme.onSurfaceVariant)),
-            for (final slot in slots)
-              Column(
-                children: [
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                        '${ProviderSlotRules.databaseTime(slot.startMinute)}'
-                        '–${ProviderSlotRules.databaseTime(slot.endMinute)}'),
-                    trailing: IconButton(
-                      tooltip: 'Remove working slot',
-                      onPressed: _busy || !_fresh
-                          ? null
-                          : () => _confirmRemoval('Remove working slot?',
-                              () => widget.removeSlot(slot.id)),
-                      icon: const Icon(Icons.delete_outline),
-                    ),
-                  ),
-                  if (slot.endMinute - slot.startMinute <
-                      ProviderSlotRules.minimumMinutes)
-                    Text(
-                      'This older slot is under 2 hours. Remove it and add a valid slot before accepting requests.',
-                      style: TextStyle(color: scheme.error),
-                    ),
-                ],
-              ),
-            TextButton.icon(
-              onPressed:
-                  _busy || !_fresh ? null : () => _addSlot(weekday, allSlots),
-              icon: const Icon(Icons.add),
-              label: const Text('Add working slot'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _WorkingSlotDialog extends StatefulWidget {
-  const _WorkingSlotDialog({
-    required this.weekday,
-    required this.dayName,
-    required this.existing,
-  });
-  final int weekday;
-  final String dayName;
-  final List<ProviderWeeklySlotItem> existing;
-
-  @override
-  State<_WorkingSlotDialog> createState() => _WorkingSlotDialogState();
-}
-
-class _WorkingSlotDialogState extends State<_WorkingSlotDialog> {
-  TimeOfDay _start = const TimeOfDay(hour: 8, minute: 0);
-  TimeOfDay _end = const TimeOfDay(hour: 10, minute: 0);
-  String? _error;
-
-  Future<void> _pick(bool start) async {
-    final value = await showTimeSlotPicker(
-      context: context,
-      initialTime: start ? _start : _end,
-      title: start ? 'Working slot starts' : 'Working slot ends',
-      description:
-          'Your working hours in MYT. Saving checks for overlapping slots.',
-      firstMinute: start
-          ? 0
-          : timeOfDayMinutes(_start) + ProviderSlotRules.minimumMinutes,
-      lastMinute: start ? 1439 - ProviderSlotRules.minimumMinutes : 1439,
-    );
-    if (!mounted || value == null) return;
-    setState(() {
-      if (start) {
-        _start = value;
-        if (timeOfDayMinutes(_end) - timeOfDayMinutes(value) <
-            ProviderSlotRules.minimumMinutes) {
-          final end =
-              timeOfDayMinutes(value) + ProviderSlotRules.minimumMinutes;
-          _end = TimeOfDay(hour: end ~/ 60, minute: end % 60);
-        }
-      } else {
-        _end = value;
-      }
-      _error = null;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) => AlertDialog(
-        scrollable: true,
-        title: const Text('Add working slot'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('${widget.dayName} · minimum 2 hours'),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: () => _pick(true),
-              child: Text('Start ${timeSlotLabel(timeOfDayMinutes(_start))}'),
-            ),
-            OutlinedButton(
-              onPressed: () => _pick(false),
-              child: Text('End ${timeSlotLabel(timeOfDayMinutes(_end))}'),
-            ),
-            if (_error != null)
-              Text(_error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error)),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Keep unchanged'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final start = _start.hour * 60 + _start.minute;
-              final end = _end.hour * 60 + _end.minute;
-              final error = ProviderSlotRules.validate(
-                weekday: widget.weekday,
-                startMinute: start,
-                endMinute: end,
-                existing: widget.existing,
-              );
-              if (error != null) {
-                setState(() => _error = error);
-                return;
-              }
-              Navigator.of(context).pop((start, end));
-            },
-            child: const Text('Save slot'),
-          ),
-        ],
-      );
 }

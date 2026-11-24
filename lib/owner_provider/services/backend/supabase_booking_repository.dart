@@ -261,9 +261,9 @@ class SupabaseBookingRepository {
     if (!startUtc.isUtc ||
         !endUtc.isUtc ||
         !endUtc.isAfter(startUtc) ||
-        endUtc.difference(startUtc) > const Duration(days: 7)) {
+        endUtc.difference(startUtc) > const Duration(days: 42)) {
       throw ArgumentError(
-          'Schedule requests require a UTC interval of at most seven days.');
+          'Schedule requests require a UTC interval of at most 42 days.');
     }
     if (before != null &&
         (!RegExp(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$')

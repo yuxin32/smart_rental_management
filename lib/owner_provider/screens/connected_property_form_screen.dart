@@ -10,6 +10,8 @@ import '../widgets/unsaved_changes_guard.dart';
 import '../widgets/bedroom_count_field.dart';
 import '../widgets/building_name_field.dart';
 import '../widgets/time_slot_picker.dart';
+import '../widgets/service_location_fields.dart';
+import '../services/backend/service_location.dart';
 
 /// Values collected for a real Owner property. Saving is delegated to the
 /// connected workspace so this form never writes local preview data.
@@ -22,6 +24,8 @@ class ConnectedPropertyInput {
     required this.sizeSqft,
     required this.cleaningWindowStart,
     required this.cleaningWindowEnd,
+    this.areaId,
+    this.pinLink = '',
   });
 
   final String unitName;
@@ -31,6 +35,8 @@ class ConnectedPropertyInput {
   final int sizeSqft;
   final String cleaningWindowStart;
   final String cleaningWindowEnd;
+  final String? areaId;
+  final String pinLink;
 }
 
 class ConnectedPropertyFormScreen extends StatefulWidget {
@@ -40,12 +46,14 @@ class ConnectedPropertyFormScreen extends StatefulWidget {
     this.initial,
     this.canSave,
     this.loadBuildingOptions,
+    this.loadServiceAreas,
   });
 
   final Future<void> Function(ConnectedPropertyInput input) onSave;
   final DemoProperty? initial;
   final Future<List<Map<String, dynamic>>> Function()? loadBuildingOptions;
   final bool Function()? canSave;
+  final Future<List<ServiceAreaOption>> Function()? loadServiceAreas;
 
   @override
   State<ConnectedPropertyFormScreen> createState() =>
@@ -60,6 +68,8 @@ class _ConnectedPropertyFormScreenState
   final _address = TextEditingController();
   final _bedrooms = TextEditingController();
   final _size = TextEditingController();
+  final _pin = TextEditingController();
+  Set<String> _areas = {};
   TimeOfDay? _start;
   TimeOfDay? _end;
   bool _saving = false;
@@ -92,11 +102,16 @@ class _ConnectedPropertyFormScreenState
   @override
   void initState() {
     super.initState();
+    _address.addListener(() {
+      if (_pin.text.isNotEmpty) _pin.clear();
+    });
     final value = widget.initial;
     if (value == null) return;
     _unit.text = workspaceText(value.unit);
     _building.text = workspaceText(value.tower);
     _address.text = workspaceText(value.address);
+    _areas = {if (value.locationAreaId != null) value.locationAreaId!};
+    _pin.text = value.locationPinLink;
     _bedrooms.text = '${value.bedrooms}';
     _size.text = '${value.sizeSqft}';
     _start = value.cleaningWindowStart;
@@ -110,6 +125,7 @@ class _ConnectedPropertyFormScreenState
     _address.dispose();
     _bedrooms.dispose();
     _size.dispose();
+    _pin.dispose();
     super.dispose();
   }
 
@@ -149,6 +165,10 @@ class _ConnectedPropertyFormScreenState
     }
     if (_saving || _needsVerification || !_formKey.currentState!.validate())
       return;
+    if (widget.loadServiceAreas != null && _areas.isEmpty) {
+      setState(() => _error = 'Choose a rental service area.');
+      return;
+    }
     if (_start == null || _end == null) return;
     if (_minutes(_end!) <= _minutes(_start!)) {
       setState(() => _error = 'The end time must be after the start time.');
@@ -173,6 +193,8 @@ class _ConnectedPropertyFormScreenState
       }
       writeStarted = true;
       await widget.onSave(ConnectedPropertyInput(
+        areaId: _areas.firstOrNull,
+        pinLink: _pin.text,
         unitName: _originalOrEdited(_unit.text, widget.initial?.unit),
         buildingName: _buildingToSave,
         address: _originalOrEdited(_address.text, widget.initial?.address),
@@ -296,6 +318,8 @@ class _ConnectedPropertyFormScreenState
   Widget build(BuildContext context) {
     return UnsavedChangesGuard(
         dirty: () =>
+            _areas.firstOrNull != widget.initial?.locationAreaId ||
+            _pin.text.trim() != (widget.initial?.locationPinLink ?? '') ||
             _unit.text != workspaceText(widget.initial?.unit ?? '') ||
             _building.text != workspaceText(widget.initial?.tower ?? '') ||
             _address.text != workspaceText(widget.initial?.address ?? '') ||
@@ -339,6 +363,15 @@ class _ConnectedPropertyFormScreenState
                       helper:
                           'The address the provider needs to find this property.'),
                   BedroomCountField(controller: _bedrooms, enabled: !_saving),
+                  if (widget.loadServiceAreas != null) ...[
+                    const SizedBox(height: 16),
+                    ServiceLocationFields(
+                        loadAreas: widget.loadServiceAreas!,
+                        selected: _areas,
+                        onChanged: (v) => setState(() => _areas = v),
+                        pinController: _pin,
+                        enabled: !_saving),
+                  ],
                   const SizedBox(height: 14),
                   _textField('Size (sqft)', _size,
                       numeric: true,

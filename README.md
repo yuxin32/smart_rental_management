@@ -8,6 +8,8 @@ The app connects to the integrated Supabase project `myetpfavvwuevdcybdes`. Its 
 
 See [integration notes](docs/INTEGRATION.md) for schema decisions, first administrator setup, source revisions, verification and remaining deployment requirements.
 
+The latest Owner/Provider screens, matching, availability, calendar and Android reminders are included on the integration branch. See the [latest upgrade notes](docs/OWNER_PROVIDER_LATEST_UPGRADE.md) before running against the hosted backend: migrations 047–052 still require reviewed deployment. Local test success does not mark hosted UAT complete.
+
 Both source projects' test records and seven Auth accounts have now been migrated. Use the same existing email/password combinations in the appropriate role workspace. Original user IDs, relationships and password hashes were preserved. See docs/DATA_MIGRATION.md for reconciliation and verification details.
 
 Backend migrations are exclusively for this integrated environment. Do not apply them to either original Supabase project.

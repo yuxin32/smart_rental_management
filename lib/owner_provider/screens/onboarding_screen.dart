@@ -20,6 +20,13 @@ class OnboardingScreen extends StatefulWidget {
 class _OnboardingScreenState extends State<OnboardingScreen> {
   final _ctl = PageController();
   int _idx = 0;
+  bool _moving = false;
+
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
 
   static const _ownerPages = <_OnbPageData>[
     _OnbPageData(
@@ -74,14 +81,19 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   void _skip() => UserSessionAccess.of(context).markOnboardingSeen();
 
-  void _next() {
+  Future<void> _move(int direction) async {
+    if (_moving) return;
     final pages = _pagesFor(UserSessionAccess.of(context).role);
-    if (_idx < pages.length - 1) {
-      _ctl.nextPage(
-          duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
-    } else {
+    final next = _idx + direction;
+    if (next < 0) return;
+    if (next >= pages.length) {
       UserSessionAccess.of(context).markOnboardingSeen();
+      return;
     }
+    setState(() => _moving = true);
+    await _ctl.animateToPage(next,
+        duration: const Duration(milliseconds: 280), curve: Curves.easeOut);
+    if (mounted) setState(() => _moving = false);
   }
 
   @override
@@ -90,72 +102,91 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final isLast = _idx == pages.length - 1;
     final sem = SemanticColors.of(context);
     final accent = pages[_idx].accent;
-    return Scaffold(
-      body: AnimatedContainer(
-        duration: const Duration(milliseconds: 400),
-        curve: Curves.easeOut,
-        // ON1: subtle accent-tinted background that animates with the page
-        color: accent.withOpacity(isLast ? 0.0 : 0.04),
-        child: SafeArea(
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.topRight,
-                child: TextButton(
-                  onPressed: _skip,
-                  style: TextButton.styleFrom(
-                    foregroundColor: sem.textSecondary,
-                  ),
-                  child: const Text('Skip'),
-                ),
-              ),
-              Expanded(
-                child: PageView.builder(
-                  controller: _ctl,
-                  onPageChanged: (i) => setState(() => _idx = i),
-                  itemCount: pages.length,
-                  itemBuilder: (ctx, i) => _OnbPage(data: pages[i]),
-                ),
-              ),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: List.generate(pages.length, (i) {
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    margin: const EdgeInsets.symmetric(horizontal: 3),
-                    width: i == _idx ? 24 : 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: i == _idx ? pages[_idx].accent : sem.border,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                  );
-                }),
-              ),
-              const SizedBox(height: 16),
-              Padding(
-                padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton(
-                    onPressed: _next,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: accent,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      textStyle: const TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
+    return PopScope(
+        canPop: false,
+        onPopInvoked: (didPop) {
+          if (!didPop) _move(-1);
+        },
+        child: Scaffold(
+          body: AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOut,
+            // ON1: subtle accent-tinted background that animates with the page
+            color: accent.withOpacity(isLast ? 0.0 : 0.04),
+            child: SafeArea(
+              child: Column(
+                children: [
+                  Align(
+                    alignment: Alignment.topRight,
+                    child: TextButton(
+                      onPressed: _skip,
+                      style: TextButton.styleFrom(
+                        foregroundColor: sem.textSecondary,
                       ),
+                      child: const Text('Skip'),
                     ),
-                    child: Text(isLast ? 'Get started' : 'Next'),
                   ),
-                ),
+                  Expanded(
+                    child: PageView.builder(
+                      controller: _ctl,
+                      physics: const NeverScrollableScrollPhysics(),
+                      onPageChanged: (i) => setState(() => _idx = i),
+                      itemCount: pages.length,
+                      itemBuilder: (ctx, i) => _OnbPage(data: pages[i]),
+                    ),
+                  ),
+                  Semantics(
+                      liveRegion: true,
+                      label: 'Step ${_idx + 1} of ${pages.length}',
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List.generate(pages.length, (i) {
+                          return AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            margin: const EdgeInsets.symmetric(horizontal: 3),
+                            width: i == _idx ? 24 : 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color:
+                                  i == _idx ? pages[_idx].accent : sem.border,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          );
+                        }),
+                      )),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+                    child: Row(
+                      children: [
+                        TextButton(
+                          onPressed:
+                              _idx == 0 || _moving ? null : () => _move(-1),
+                          style: TextButton.styleFrom(
+                              minimumSize: const Size(64, 48)),
+                          child: const Text('Back'),
+                        ),
+                        const SizedBox(width: 16),
+                        Expanded(
+                            child: FilledButton(
+                          onPressed: _moving ? null : () => _move(1),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            textStyle: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          child: Text(isLast ? 'Get started' : 'Next'),
+                        )),
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
-      ),
-    );
+        ));
   }
 }
 
@@ -179,49 +210,54 @@ class _OnbPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sem = SemanticColors.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 32),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          // ON2: ring around icon for extra polish
-          Container(
-            width: 120,
-            height: 120,
-            decoration: BoxDecoration(
-              color: data.accent.withOpacity(0.1),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: data.accent.withOpacity(0.2),
-                width: 2,
-              ),
-            ),
-            child: Icon(data.icon, size: 64, color: data.accent),
-          ),
-          const SizedBox(height: 32),
-          Text(
-            data.title,
-            textAlign: TextAlign.center,
-            // ON3: explicit theme color for title
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.w700,
-              letterSpacing: -0.5,
-              color: sem.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            data.body,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: 15,
-              color: sem.textSecondary,
-              height: 1.5,
-            ),
-          ),
-        ],
-      ),
-    );
+    return LayoutBuilder(
+        builder: (context, bounds) => SingleChildScrollView(
+            child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: bounds.maxHeight),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // ON2: ring around icon for extra polish
+                      Container(
+                        width: 120,
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: data.accent.withOpacity(0.1),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: data.accent.withOpacity(0.2),
+                            width: 2,
+                          ),
+                        ),
+                        child: Icon(data.icon, size: 64, color: data.accent),
+                      ),
+                      const SizedBox(height: 32),
+                      Text(
+                        data.title,
+                        textAlign: TextAlign.center,
+                        // ON3: explicit theme color for title
+                        style: TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.5,
+                          color: sem.textPrimary,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        data.body,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontSize: 15,
+                          color: sem.textSecondary,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ))));
   }
 }

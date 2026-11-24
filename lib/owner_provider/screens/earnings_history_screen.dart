@@ -45,6 +45,7 @@ class EarningsHistoryScreen extends StatefulWidget {
 }
 
 class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
+  final _scroll = ScrollController();
   _EarningsPeriod _period = _EarningsPeriod.thisMonth;
   bool _showTrend = false;
   bool get _connected => widget.binding != null;
@@ -71,6 +72,7 @@ class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
   @override
   void dispose() {
     widget.binding?.removeListener(_changed);
+    _scroll.dispose();
     super.dispose();
   }
 
@@ -213,37 +215,18 @@ class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        controller: _scroll,
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         children: [
           if (binding != null)
             SnapshotRefreshNotice(
                 refreshing: binding.refreshing,
                 failed: binding.refreshError != null,
                 onRetry: binding.refresh),
-          _buildPeriodFilter(),
-          const SizedBox(height: 5),
-          Row(
-            children: [
-              Icon(Icons.calendar_today_outlined,
-                  size: 14, color: sem.textSecondary),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  _periodDateRange(scoped, DateTime.now()),
-                  key: const ValueKey('earnings-period-range'),
-                  style: TextStyle(color: sem.textSecondary, fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
           _buildHero(context, scoped),
+          const SizedBox(height: 8),
+          _buildPeriodFilter(),
           if (_report case final report?) ...[
-            const SizedBox(height: 8),
-            Text(
-                'Based on locked booking quotes and completion dates (MYT). '
-                'Platform fees and payouts are not connected; this is not a payment confirmation.',
-                style: TextStyle(color: sem.textSecondary, fontSize: 12)),
             if (report.unpriced > 0)
               Text(
                   '${report.unpriced} completed jobs have no saved quote. '
@@ -316,7 +299,8 @@ class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
     final gross = s.records.fold<double>(0, (sum, r) => sum + r.gross);
     final fee = s.records.fold<double>(0, (sum, r) => sum + r.platformFee);
     return Container(
-      padding: const EdgeInsets.all(20),
+      key: const ValueKey('earnings-summary'),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         // E1: Theme gradient
         gradient: AppTheme.heroGradient(context),
@@ -372,7 +356,7 @@ class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Text(
             'RM ${(_report?.gross ?? s.totalNet).toStringAsFixed(_connected ? 2 : 0)}',
             style: const TextStyle(
@@ -399,6 +383,12 @@ class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
                 ),
               ),
             ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _periodDateRange(s, DateTime.now()),
+            key: const ValueKey('earnings-period-range'),
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
           ),
           const SizedBox(height: 12),
           Container(height: 1, color: Colors.white24),
@@ -435,6 +425,11 @@ class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
                 } else {
                   setState(() => _period = period);
                 }
+                if (_scroll.hasClients) {
+                  _scroll.animateTo(0,
+                      duration: const Duration(milliseconds: 180),
+                      curve: Curves.easeOut);
+                }
               },
               selectedColor: sem.primarySurface,
               backgroundColor: sem.surface,
@@ -449,7 +444,7 @@ class _EarningsHistoryScreenState extends State<EarningsHistoryScreen> {
                 fontSize: 12,
               ),
             ),
-            if (period != _EarningsPeriod.values.last) const SizedBox(width: 8),
+            if (period != _EarningsPeriod.values.last) const SizedBox(width: 6),
           ],
         ],
       ),
