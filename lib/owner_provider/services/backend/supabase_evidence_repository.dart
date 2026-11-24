@@ -24,7 +24,8 @@ class SupabaseEvidenceRepository {
     final generation = cache?.generation;
     final row = await client
         .from('booking_evidence')
-        .select('booking_id,before_path,after_path,completion_remarks')
+        .select(
+            'booking_id,before_path,after_path,before_locked_at_start,completion_remarks')
         .eq('booking_id', bookingId)
         .maybeSingle();
     if (client.auth.currentUser?.id != userId ||
@@ -75,7 +76,10 @@ class SupabaseEvidenceRepository {
           try {
             final response = await client.functions.invoke(
               'evidence-validate',
-              body: photo.bytes,
+              // Browser fetch requires a native Uint8Array, not the SDK's
+              // read-only wrapper. Copy only at this transport boundary;
+              // retained retry bytes, upload ID and digest stay immutable.
+              body: Uint8List.fromList(photo.bytes),
               headers: {
                 'Content-Type': 'application/octet-stream',
                 'x-booking-id': bookingId,
@@ -108,18 +112,6 @@ class SupabaseEvidenceRepository {
           ) as Map,
         ),
       ).run(bookingId, photo),
-    );
-  }
-
-  Future<void> saveRemarks(String bookingId, String remarks) async {
-    final value = remarks.trim();
-    if (value.length > 1000) throw ArgumentError('Use up to 1,000 characters.');
-    await client.rpc(
-      'save_evidence_remarks',
-      params: {
-        'p_booking_id': bookingId,
-        'p_remarks': value,
-      },
     );
   }
 
@@ -222,12 +214,14 @@ class BookingEvidenceRecord {
     required this.bookingId,
     this.beforePath,
     this.afterPath,
+    this.beforeLockedAtStart = false,
     required this.remarks,
   });
 
   final String bookingId;
   final String? beforePath;
   final String? afterPath;
+  final bool beforeLockedAtStart;
   final String remarks;
 
   factory BookingEvidenceRecord.fromMap(Map<String, dynamic> row) {
@@ -235,6 +229,7 @@ class BookingEvidenceRecord {
       bookingId: row['booking_id'] as String,
       beforePath: row['before_path'] as String?,
       afterPath: row['after_path'] as String?,
+      beforeLockedAtStart: row['before_locked_at_start'] == true,
       remarks: row['completion_remarks'] as String? ?? '',
     );
   }

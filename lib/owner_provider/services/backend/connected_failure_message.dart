@@ -18,6 +18,16 @@ abstract final class ConnectedFailureMessage {
   }
 
   static String forWrite(Object error, {required String item}) {
+    if (error is PostgrestException &&
+        error.code == 'PT409' &&
+        error.details == 'booking_start_not_reached') {
+      return 'The scheduled start time has not been reached. Start cleaning at the agreed date and time (MYT).';
+    }
+    if (error is PostgrestException &&
+        error.code == 'PT409' &&
+        error.details == 'before_photo_required') {
+      return 'Save a Before photo before starting cleaning.';
+    }
     if (error is AuthException) {
       return 'Your session may have expired. Sign in again, then check whether the $item was saved.';
     }

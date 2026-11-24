@@ -64,7 +64,7 @@ class SafeDiagnostics {
     if (error is AuthException) return SafeFailureCategory.authentication;
     if (error is PostgrestException) {
       if (error.code == '42501') return SafeFailureCategory.permission;
-      if (['23505', '23514', '23P01', '40001'].contains(error.code)) {
+      if (['23505', '23514', '23P01', '40001', 'PT409'].contains(error.code)) {
         return SafeFailureCategory.conflict;
       }
     }

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import '../services/backend/safe_diagnostics.dart';
 import '../services/backend/booking_rate_limit.dart';
+import '../services/backend/connected_failure_message.dart';
 import '../widgets/rate_limit_notice.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -11,6 +12,7 @@ import '../services/backend/supabase_evidence_repository.dart';
 import '../services/backend/evidence_photo_preparation.dart';
 import '../widgets/connected_state_panel.dart';
 import '../widgets/connected_action_feedback.dart';
+import '../widgets/evidence_photo_preview.dart';
 
 typedef PickEvidencePhoto = Future<Uint8List?> Function();
 
@@ -25,9 +27,10 @@ class ConnectedBookingEvidenceScreen extends StatefulWidget {
     required this.load,
     required this.download,
     required this.upload,
-    required this.saveRemarks,
     required this.complete,
     required this.checkStatus,
+    this.start,
+    this.propertyName,
     this.pickPhoto,
     this.cleanup,
     this.removePhoto,
@@ -36,6 +39,7 @@ class ConnectedBookingEvidenceScreen extends StatefulWidget {
   final String bookingId;
   final bool isProvider;
   final String status;
+  final String? propertyName;
   final Future<BookingEvidenceRecord?> Function(String) load;
   final Future<Uint8List> Function(String) download;
   final Future<String> Function(
@@ -47,8 +51,8 @@ class ConnectedBookingEvidenceScreen extends StatefulWidget {
   ) upload;
   final Future<bool> Function(String)? cleanup;
   final Future<void> Function(String, EvidenceKind, String)? removePhoto;
-  final Future<void> Function(String, String) saveRemarks;
-  final Future<void> Function(String) complete;
+  final Future<void> Function(String)? start;
+  final Future<void> Function(String, String) complete;
   final Future<String?> Function(String) checkStatus;
   final PickEvidencePhoto? pickPhoto;
 
@@ -77,12 +81,27 @@ class _ConnectedBookingEvidenceScreenState
   bool _cleanupPending = false;
   bool _removalUncertain = false;
   bool _editingClosed = false;
+  bool _confirmed = false;
+
+  bool get _starting =>
+      widget.isProvider && widget.status == 'Accepted' && widget.start != null;
 
   bool get _canEdit =>
       widget.isProvider &&
-      widget.status == 'In Progress' &&
+      (_starting || widget.status == 'In Progress') &&
       !_completed &&
       !_editingClosed;
+
+  bool _canChangePhoto(EvidenceKind kind) =>
+      _canEdit &&
+      (!_starting || kind == EvidenceKind.before) &&
+      (kind != EvidenceKind.before || _record?.beforeLockedAtStart != true);
+
+  bool get _canComplete =>
+      _confirmed &&
+      _record?.beforePath != null &&
+      _record?.afterPath != null &&
+      _pendingPhoto == null;
 
   @override
   void initState() {
@@ -187,8 +206,11 @@ class _ConnectedBookingEvidenceScreenState
     return image?.readAsBytes();
   }
 
-  Future<void> _upload(EvidenceKind kind) async {
-    if (_busy || !_canEdit || _removalUncertain || _ratePause.active) return;
+  Future<void> _upload(EvidenceKind kind, {bool selectOnly = false}) async {
+    if (_busy ||
+        !_canChangePhoto(kind) ||
+        _removalUncertain ||
+        _ratePause.active) return;
     final photoLabel = kind == EvidenceKind.before ? 'Before' : 'After';
     setState(() {
       _busy = true;
@@ -197,7 +219,7 @@ class _ConnectedBookingEvidenceScreenState
       _workingTitle = 'Choose a ${photoLabel.toLowerCase()} photo';
     });
     try {
-      if (_pendingPhoto == null) {
+      if (_pendingPhoto == null || selectOnly) {
         final bytes = await _pick();
         if (bytes == null || !mounted) return;
         setState(() => _workingTitle = 'Preparing photo for upload');
@@ -214,6 +236,7 @@ class _ConnectedBookingEvidenceScreenState
         _pendingPhoto = photo;
         _pendingPhotoDescription = prepared.description;
       }
+      if (selectOnly) return;
       final photo = _pendingPhoto!;
       if (photo.kind != kind) return;
       setState(() {
@@ -229,6 +252,10 @@ class _ConnectedBookingEvidenceScreenState
       );
       if (!mounted) return;
       _pendingPhoto = null;
+      if (_starting) {
+        await _startWithSavedBefore();
+        return;
+      }
       await _refresh();
       if (mounted && !_loadFailed) {
         setState(
@@ -282,6 +309,10 @@ class _ConnectedBookingEvidenceScreenState
         if (_pendingPhoto != null &&
             latestPath == _pendingPhoto!.pathFor(widget.bookingId)) {
           _pendingPhoto = null;
+          if (_starting) {
+            await _startWithSavedBefore();
+            return;
+          }
           await _refresh();
           if (mounted && !_loadFailed) {
             setState(
@@ -312,9 +343,51 @@ class _ConnectedBookingEvidenceScreenState
     }
   }
 
+  Future<void> _startWithSavedBefore() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+      _workingTitle = 'Starting cleaning';
+    });
+    try {
+      await widget.start!(widget.bookingId);
+      if (mounted) Navigator.of(context).pop(true);
+    } catch (error) {
+      SafeDiagnostics.app.record(SafeOperation.bookingUpdate, error);
+      if (!mounted) return;
+      try {
+        final status = await widget.checkStatus(widget.bookingId);
+        if (!mounted) return;
+        if (status == 'In Progress') {
+          Navigator.of(context).pop(true);
+          return;
+        }
+        await _refresh();
+        if (mounted) {
+          setState(() {
+            _editingClosed = status != 'Accepted';
+            if (!_loadFailed) {
+              _error = _editingClosed
+                  ? 'Return to booking details to check its current status.'
+                  : ConnectedFailureMessage.forWrite(error, item: 'booking');
+            }
+          });
+        }
+      } catch (lookupError) {
+        SafeDiagnostics.app.record(SafeOperation.bookingVerify, lookupError);
+        if (mounted) {
+          setState(() => _error =
+              'Could not confirm the booking status. Check your connection and reload evidence.');
+        }
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _removePhoto(EvidenceKind kind) async {
     if (_busy ||
-        !_canEdit ||
+        !_canChangePhoto(kind) ||
         _removalUncertain ||
         _pendingPhoto != null ||
         widget.removePhoto == null) return;
@@ -336,7 +409,8 @@ class _ConnectedBookingEvidenceScreenState
                     child: const Text('Remove photo')),
               ],
             ));
-    if (!mounted || confirmed != true || _busy || !_canEdit) return;
+    if (!mounted || confirmed != true || _busy || !_canChangePhoto(kind))
+      return;
     setState(() {
       _busy = true;
       _error = null;
@@ -398,34 +472,17 @@ class _ConnectedBookingEvidenceScreenState
   }
 
   Future<void> _complete() async {
-    if (_busy || !_canEdit || _removalUncertain) return;
-    if (_pendingPhoto != null) {
-      setState(
-        () => _error =
-            'Retry the pending photo upload before completing the job.',
-      );
+    if (_busy || !_canEdit || _starting || _removalUncertain || !_canComplete)
       return;
-    }
-    if (_record?.beforePath == null || _record?.afterPath == null) {
-      setState(() => _error = 'Add both before and after photos first.');
-      return;
-    }
     final text = _remarks.text.trim();
-    if (text.isEmpty) {
-      setState(() => _error = 'Enter completion remarks first.');
-      return;
-    }
     setState(() {
       _busy = true;
       _error = null;
       _notice = null;
-      _workingTitle = 'Saving completion remarks';
+      _workingTitle = 'Confirming job completion';
     });
     try {
-      await widget.saveRemarks(widget.bookingId, text);
-      if (!mounted) return;
-      setState(() => _workingTitle = 'Confirming job completion');
-      await widget.complete(widget.bookingId);
+      await widget.complete(widget.bookingId, text);
       if (!mounted) return;
       setState(() => _completed = true);
       Navigator.of(context).pop(true);
@@ -468,14 +525,20 @@ class _ConnectedBookingEvidenceScreenState
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: Text(_canEdit ? 'Complete cleaning' : 'Completion evidence'),
+        title: Text(_starting
+            ? 'Before cleaning'
+            : _canEdit
+                ? 'Complete cleaning'
+                : 'Completion evidence'),
       ),
       body: ConnectedActionFeedbackFrame(
         notice: _busy
             ? ConnectedActionNotice(
                 ConnectedActionState.working,
                 _workingTitle,
-                'Please wait. Your current remarks are kept on this screen.',
+                _starting
+                    ? 'Saving the Before photo to this booking.'
+                    : 'Your comments are kept on this screen.',
               )
             : _error != null && !_loadFailed
                 ? ConnectedActionNotice(
@@ -487,12 +550,18 @@ class _ConnectedBookingEvidenceScreenState
         onDismiss: _busy || _error != null
             ? null
             : () => setState(() => _notice = null),
-        actionLabel: !_busy && _error != null && !_loadFailed
+        actionLabel: !_busy &&
+                _error != null &&
+                !_loadFailed &&
+                !(_starting && _pendingPhoto != null)
             ? _pendingPhoto != null
                 ? 'Retry photo upload'
                 : 'Reload evidence'
             : null,
-        onAction: !_busy && _error != null && !_loadFailed
+        onAction: !_busy &&
+                _error != null &&
+                !_loadFailed &&
+                !(_starting && _pendingPhoto != null)
             ? _pendingPhoto != null
                 ? () => _upload(_pendingPhoto!.kind)
                 : _refresh
@@ -524,6 +593,16 @@ class _ConnectedBookingEvidenceScreenState
                     : ListView(
                         padding: const EdgeInsets.fromLTRB(18, 18, 18, 32),
                         children: [
+                          if (_canEdit && widget.propertyName != null) ...[
+                            Card(
+                              margin: EdgeInsets.zero,
+                              child: ListTile(
+                                title: Text(widget.propertyName!),
+                                subtitle: Text(widget.status),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                          ],
                           Container(
                             padding: const EdgeInsets.all(18),
                             decoration: BoxDecoration(
@@ -534,9 +613,11 @@ class _ConnectedBookingEvidenceScreenState
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  _canEdit
-                                      ? 'Document your work'
-                                      : 'Service record',
+                                  _starting
+                                      ? 'Before photo required'
+                                      : _canEdit
+                                          ? 'Document your work'
+                                          : 'Service record',
                                   style: TextStyle(
                                     fontSize: 19,
                                     fontWeight: FontWeight.w800,
@@ -545,9 +626,11 @@ class _ConnectedBookingEvidenceScreenState
                                 ),
                                 const SizedBox(height: 5),
                                 Text(
-                                  _canEdit
-                                      ? 'Add a before photo, an after photo and remarks. Photos are shared privately with the booking owner.'
-                                      : 'Photos and remarks are stored privately for this booking.',
+                                  _starting
+                                      ? 'Photograph the area before cleaning.'
+                                      : _canEdit
+                                          ? 'Add the required photos and confirm the work you completed.'
+                                          : 'Photos and remarks are stored privately for this booking.',
                                   style: TextStyle(
                                     color: scheme.onPrimaryContainer,
                                   ),
@@ -562,80 +645,159 @@ class _ConnectedBookingEvidenceScreenState
                             ),
                             const SizedBox(height: 12),
                           ],
-                          _photoCard(
-                            'Before cleaning',
-                            EvidenceKind.before,
-                            _beforeBytes,
-                          ),
-                          const SizedBox(height: 12),
-                          _photoCard(
-                            'After cleaning',
-                            EvidenceKind.after,
-                            _afterBytes,
-                          ),
-                          const SizedBox(height: 18),
-                          Text(
-                            'Completion remarks',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 8),
-                          if (_canEdit)
-                            TextField(
-                              controller: _remarks,
-                              enabled: !_busy,
-                              onChanged: (_) => _remarksEdited = true,
-                              maxLines: 4,
-                              maxLength: 1000,
-                              decoration: const InputDecoration(
-                                border: OutlineInputBorder(),
-                                hintText:
-                                    'Describe what was cleaned and any issues found',
-                              ),
-                            )
+                          if (!_starting &&
+                              _canEdit &&
+                              _record?.beforeLockedAtStart == true &&
+                              _beforeBytes != null)
+                            _savedBeforeCard(_beforeBytes!, scheme)
                           else
-                            Card(
-                              child: Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: Text(
-                                  workspaceText(_record?.remarks ?? '')
-                                          .isNotEmpty
-                                      ? workspaceText(_record!.remarks)
-                                      : 'No remarks submitted.',
-                                ),
-                              ),
+                            _photoCard(
+                              'Before cleaning',
+                              EvidenceKind.before,
+                              _beforeBytes,
                             ),
-                          if (_canEdit) ...[
+                          if (_starting && _canEdit) ...[
                             const SizedBox(height: 12),
-                            FilledButton.icon(
+                            OutlinedButton.icon(
                               onPressed: _busy ||
-                                      _removalUncertain ||
-                                      _ratePause.active
+                                      _ratePause.active ||
+                                      !_canChangePhoto(EvidenceKind.before)
                                   ? null
-                                  : _complete,
-                              icon: _busy
-                                  ? const SizedBox(
-                                      height: 18,
-                                      width: 18,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Icon(Icons.task_alt),
-                              label: const Text('Mark as Completed'),
+                                  : () => _upload(EvidenceKind.before,
+                                      selectOnly: true),
+                              icon: const Icon(Icons.add_a_photo_outlined),
+                              label: Text(
+                                  _pendingPhoto != null || _beforeBytes != null
+                                      ? 'Retake photo'
+                                      : 'Take before photo'),
                             ),
                             const SizedBox(height: 8),
-                            Text(
-                              _ratePause.active
-                                  ? 'A selected photo is waiting to upload. Retry it after the pause before completing the job.'
-                                  : 'We check the photos and remarks before marking the job complete. Payment is a separate step.',
-                              textAlign: TextAlign.center,
+                            FilledButton(
+                              onPressed: _busy ||
+                                      _ratePause.active ||
+                                      (_pendingPhoto == null &&
+                                          _record?.beforePath == null)
+                                  ? null
+                                  : _pendingPhoto != null
+                                      ? () => _upload(EvidenceKind.before)
+                                      : () {
+                                          if (!_busy) _startWithSavedBefore();
+                                        },
+                              child: Text(
+                                  _pendingPhoto != null && _error != null
+                                      ? 'Retry upload'
+                                      : _pendingPhoto == null &&
+                                              _record?.beforePath != null
+                                          ? 'Start cleaning'
+                                          : 'Upload & start job'),
                             ),
+                          ],
+                          if (!_starting) ...[
+                            const SizedBox(height: 12),
+                            _photoCard(
+                              'After cleaning',
+                              EvidenceKind.after,
+                              _afterBytes,
+                            ),
+                            const SizedBox(height: 18),
+                            if (_canEdit)
+                              CheckboxListTile(
+                                contentPadding: EdgeInsets.zero,
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
+                                title: const Text(
+                                    'I completed the agreed cleaning tasks'),
+                                value: _confirmed,
+                                onChanged: _busy
+                                    ? null
+                                    : (checked) => setState(
+                                        () => _confirmed = checked ?? false),
+                              ),
+                            Text(
+                              _canEdit
+                                  ? 'Additional comments (optional)'
+                                  : 'Completion remarks',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 8),
+                            if (_canEdit)
+                              TextField(
+                                controller: _remarks,
+                                enabled: !_busy,
+                                onChanged: (_) => _remarksEdited = true,
+                                maxLines: 2,
+                                maxLength: 1000,
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  hintText: 'e.g. Left the key in the lockbox.',
+                                ),
+                              )
+                            else
+                              Card(
+                                child: Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Text(
+                                    workspaceText(_record?.remarks ?? '')
+                                            .isNotEmpty
+                                        ? workspaceText(_record!.remarks)
+                                        : 'No remarks submitted.',
+                                  ),
+                                ),
+                              ),
+                            if (_canEdit) ...[
+                              const SizedBox(height: 12),
+                              FilledButton.icon(
+                                onPressed: _busy ||
+                                        _removalUncertain ||
+                                        _ratePause.active ||
+                                        !_canComplete
+                                    ? null
+                                    : _complete,
+                                icon: _busy
+                                    ? const SizedBox(
+                                        height: 18,
+                                        width: 18,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                        ),
+                                      )
+                                    : const Icon(Icons.task_alt),
+                                label: const Text('Mark as Completed'),
+                              ),
+                              if (_ratePause.active) ...[
+                                const SizedBox(height: 8),
+                                const Text(
+                                  'Retry the photo upload after the pause to finish.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              ]
+                            ],
                           ],
                         ],
                       ),
       ),
     );
   }
+
+  Widget _savedBeforeCard(Uint8List bytes, ColorScheme scheme) => Card(
+        margin: EdgeInsets.zero,
+        child: ListTile(
+          leading: SizedBox.square(
+            dimension: 48,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: EvidencePhotoPreview(
+                bytes: bytes,
+                cacheWidth: 192,
+                errorBuilder: (_, __, ___) => const Icon(Icons.image_outlined),
+              ),
+            ),
+          ),
+          title: const Text('Before cleaning'),
+          subtitle: const Text('Saved at job start'),
+          trailing: Icon(Icons.check_circle, color: scheme.primary),
+        ),
+      );
 
   Widget _photoCard(String title, EvidenceKind kind, Uint8List? bytes) {
     final scheme = Theme.of(context).colorScheme;
@@ -706,11 +868,8 @@ class _ConnectedBookingEvidenceScreenState
             else
               ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: Image.memory(
-                  displayBytes,
-                  height: 160,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
+                child: EvidencePhotoPreview(
+                  bytes: displayBytes,
                   cacheWidth: (MediaQuery.sizeOf(context).width *
                           MediaQuery.devicePixelRatioOf(context))
                       .round()
@@ -727,7 +886,7 @@ class _ConnectedBookingEvidenceScreenState
                   ),
                 ),
               ),
-            if (_canEdit) ...[
+            if (!_starting && _canChangePhoto(kind)) ...[
               const SizedBox(height: 10),
               OutlinedButton.icon(
                 onPressed: _busy ||

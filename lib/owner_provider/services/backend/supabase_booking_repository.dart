@@ -502,6 +502,14 @@ class SupabaseBookingRepository {
     return Map<String, dynamic>.from(response as Map)['status'] as String;
   }
 
+  Future<void> completeCleaning(String bookingId, String comments) async {
+    await _writeRpc('complete_cleaning_booking', params: {
+      'p_booking_id': bookingId,
+      'p_confirmed': true,
+      'p_comments': comments.trim(),
+    });
+  }
+
   Future<AcceptanceOutcome> revisePending({
     required String bookingId,
     required DateTime start,

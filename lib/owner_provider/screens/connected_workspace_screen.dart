@@ -340,14 +340,17 @@ class _ConnectedWorkspaceScreenState extends State<ConnectedWorkspaceScreen>
     );
   }
 
-  Future<void> _openEvidence(String bookingId, String status) async {
+  Future<void> _openEvidence(
+      String bookingId, String status, String? propertyName) async {
     final evidence = widget.backend.evidence;
+    final starting = status == 'Accepted';
     final changed = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => ConnectedBookingEvidenceScreen(
           bookingId: bookingId,
           isProvider: widget.role == UserRole.provider,
           status: status,
+          propertyName: propertyName,
           load: evidence.forBooking,
           download: evidence.download,
           upload: (id, kind, bytes, token, previous) => evidence.upload(
@@ -359,20 +362,27 @@ class _ConnectedWorkspaceScreenState extends State<ConnectedWorkspaceScreen>
           ),
           cleanup: evidence.cleanup,
           removePhoto: evidence.removePhoto,
-          saveRemarks: evidence.saveRemarks,
-          complete: (id) async {
-            await widget.backend.bookings.transition(id, 'Completed');
-          },
+          start: starting
+              ? (id) async {
+                  await widget.backend.bookings.transition(id, 'In Progress');
+                }
+              : null,
+          complete: widget.backend.bookings.completeCleaning,
           checkStatus: widget.backend.bookings.currentStatus,
         ),
       ),
     );
-    if (changed == true && mounted) {
+    if (!mounted) return;
+    if (changed == true || starting) {
       setState(_reload);
+    }
+    if (changed == true) {
       _showAction(
         ConnectedActionState.success,
-        'Cleaning completed',
-        'Booking completed. The owner can now review the evidence.',
+        starting ? 'Cleaning started' : 'Cleaning completed',
+        starting
+            ? 'Before photo saved. The booking is now In Progress.'
+            : 'Booking completed. The owner can now review the evidence.',
       );
     }
   }
@@ -403,20 +413,21 @@ class _ConnectedWorkspaceScreenState extends State<ConnectedWorkspaceScreen>
 
   Widget _bookingCard(Map<String, dynamic> row) {
     final bookingId = row['booking_id'] as String;
+    final propertyName = row['unit_name'] == null
+        ? null
+        : '${workspaceText(row['unit_name'] as String)}, ${workspaceText(row['building_name'] as String)}';
     return ConnectedBookingCard(
       row: row,
       isProvider: widget.role == UserRole.provider,
       busy: _busy,
-      propertyName: row['unit_name'] == null
-          ? null
-          : '${workspaceText(row['unit_name'] as String)}, ${workspaceText(row['building_name'] as String)}',
+      propertyName: propertyName,
       onAction: (action) => _apply(bookingId, action),
       onHistory: () => _showHistory(bookingId,
           ownerId: row['owner_id'] as String?,
           providerId: row['provider_id'] as String?),
       onMessages: () => _openMessages(bookingId),
-      onEvidence: () =>
-          _openEvidence(bookingId, row['current_status'] as String? ?? ''),
+      onEvidence: () => _openEvidence(
+          bookingId, row['current_status'] as String? ?? '', propertyName),
       onReview: () => _openReview(bookingId),
       onCancel: () => _requestCancellation(bookingId),
       onEdit: () => _editPending(row),

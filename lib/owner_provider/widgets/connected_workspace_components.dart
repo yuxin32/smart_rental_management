@@ -1,6 +1,7 @@
 import '../presentation/workspace_text.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'scheduled_start_button.dart';
 
 import '../theme/app_theme.dart';
 
@@ -252,6 +253,7 @@ class ConnectedBookingCard extends StatelessWidget {
     required this.onReview,
     required this.onCancel,
     this.onEdit,
+    this.now,
   });
 
   final Map<String, dynamic> row;
@@ -265,11 +267,14 @@ class ConnectedBookingCard extends StatelessWidget {
   final VoidCallback onReview;
   final VoidCallback onCancel;
   final VoidCallback? onEdit;
+  final DateTime Function()? now;
 
   @override
   Widget build(BuildContext context) {
     final colors = SemanticColors.of(context);
     final status = row['current_status'] as String? ?? 'Unknown';
+    final start =
+        DateTime.tryParse(row['requested_start_at']?.toString() ?? '');
     final scheme = Theme.of(context).colorScheme;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final statusColor = switch (status) {
@@ -282,8 +287,8 @@ class ConnectedBookingCard extends StatelessWidget {
     };
     final nextStep = switch ((isProvider, status)) {
       (true, 'Pending') => 'Review this request and decide whether to accept.',
-      (true, 'Accepted') => 'Ready to start at the agreed time.',
-      (true, 'In Progress') => 'Add photos and remarks when the job is done.',
+      (true, 'Accepted') => 'Take a Before photo to start cleaning.',
+      (true, 'In Progress') => 'Add completion evidence when cleaning is done.',
       (false, 'Pending') => 'Waiting for the provider to respond.',
       (false, 'Accepted') => 'Your provider has confirmed this appointment.',
       (false, 'In Progress') => 'The cleaning is under way.',
@@ -406,8 +411,12 @@ class ConnectedBookingCard extends StatelessWidget {
             if (isProvider && status == 'Pending')
               _primary(context, 'Accept request', () => onAction('Accepted')),
             if (isProvider && status == 'Accepted')
-              _primary(
-                  context, 'Start cleaning', () => onAction('In Progress')),
+              ScheduledStartButton(
+                start: start,
+                busy: busy,
+                now: now,
+                onStart: onEvidence,
+              ),
             if (isProvider && status == 'In Progress')
               _primary(context, 'Add evidence & complete', onEvidence),
             if (!isProvider && status == 'Completed')
