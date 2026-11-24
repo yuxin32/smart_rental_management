@@ -359,43 +359,363 @@ String providerRateLabel(Map<String, dynamic> row) => [
         'RM ${(row['daily_rate'] as num).toStringAsFixed(2)}/8-hour day',
     ].join(' · ');
 
-class OwnerProviderDetails extends StatelessWidget {
-  const OwnerProviderDetails({super.key, required this.row});
+/// Owner-facing directory details. A request still uses the existing server-
+/// checked form; browsing this snapshot does not select or reserve a Provider.
+class OwnerProviderDetails extends StatefulWidget {
+  const OwnerProviderDetails({
+    super.key,
+    required this.row,
+    this.onRequestCleaning,
+  });
   final Map<String, dynamic> row;
+  final Future<void> Function()? onRequestCleaning;
+
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(title: const Text('Provider profile')),
-        body: ListView(padding: const EdgeInsets.all(20), children: [
-          Text(providerDirectoryName(row),
-              style:
-                  const TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 8),
-          Text(row['service_area'] as String),
-          if ((row['bio'] as String?)?.trim().isNotEmpty == true) ...[
-            const SizedBox(height: 16),
-            Text(row['bio'] as String),
+  State<OwnerProviderDetails> createState() => _OwnerProviderDetailsState();
+}
+
+class _OwnerProviderDetailsState extends State<OwnerProviderDetails> {
+  bool _requesting = false;
+
+  Future<void> _request() async {
+    if (_requesting || widget.onRequestCleaning == null) return;
+    setState(() => _requesting = true);
+    try {
+      await widget.onRequestCleaning!();
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not open your cleaning request. Try again.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _requesting = false);
+    }
+  }
+
+  String _amount(num amount) => amount == amount.roundToDouble()
+      ? amount.toStringAsFixed(0)
+      : amount.toStringAsFixed(2);
+
+  Widget _heading(String text) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Text(
+      text,
+      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+    ),
+  );
+
+  Widget _rate(String label, num amount, String unit) {
+    final sem = SemanticColors.of(context);
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: sem.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: sem.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              style: TextStyle(color: sem.textSecondary, fontSize: 12),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(
+                  'RM ${_amount(amount)}',
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w800,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+                Text(
+                  unit,
+                  style: TextStyle(color: sem.textSecondary, fontSize: 12),
+                ),
+              ],
+            ),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _rates() {
+    final hourly = widget.row['hourly_rate'];
+    final daily = widget.row['daily_rate'];
+    final cards = <Widget>[
+      if (hourly is num && hourly.isFinite && hourly > 0)
+        _rate('Hourly', hourly, '/ hour'),
+      if (daily is num && daily.isFinite && daily > 0)
+        _rate('8-hour day', daily, '/ day'),
+    ];
+    if (cards.isEmpty) return const Text('Rates unavailable.');
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+        if (cards.length == 1 || constraints.maxWidth < 280 * scale) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (var i = 0; i < cards.length; i++) ...[
+                if (i > 0) const SizedBox(height: 10),
+                cards[i],
+              ],
+            ],
+          );
+        }
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: cards[0]),
+            const SizedBox(width: 10),
+            Expanded(child: cards[1]),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _services() {
+    final services = providerServices(widget.row);
+    final sem = SemanticColors.of(context);
+    if (services.isEmpty) return const Text('No services listed yet.');
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: sem.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(color: sem.border),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        child: Column(
+          children: [
+            for (var i = 0; i < services.length; i++) ...[
+              if (i > 0) Divider(height: 1, color: sem.border),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: sem.primarySurface,
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: Icon(
+                        Icons.cleaning_services_outlined,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            services[i]['name'] as String,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            (services[i]['description'] as String?)
+                                        ?.trim()
+                                        .isNotEmpty ==
+                                    true
+                                ? services[i]['description'] as String
+                                : 'Confirm specific tasks with the provider before work starts.',
+                            style: TextStyle(color: sem.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final sem = SemanticColors.of(context);
+    final bio = widget.row['bio'] as String?;
+    final completed = widget.row['completed_job_count'];
+    return Scaffold(
+      appBar: AppBar(title: const Text('Provider profile')),
+      body: ListView(
+        padding: const EdgeInsets.all(18),
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: sem.primarySurface,
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Icon(
+                  Icons.auto_awesome_outlined,
+                  color: Theme.of(context).colorScheme.primary,
+                  size: 24,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      providerDirectoryName(widget.row),
+                      style: const TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.location_on_outlined,
+                          color: sem.textSecondary,
+                          size: 16,
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            widget.row['service_area'] as String,
+                            style: TextStyle(color: sem.textSecondary),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              Icon(
+                Icons.star_border_rounded,
+                size: 17,
+                color: sem.textSecondary,
+              ),
+              Text(
+                widget.row['rating_average'] == null
+                    ? 'No ratings yet'
+                    : '${widget.row['rating_average']} / 5',
+              ),
+              Text('·', style: TextStyle(color: sem.textSecondary)),
+              Text(
+                '$completed completed ${completed == 1 ? 'job' : 'jobs'}',
+                style: TextStyle(color: sem.textSecondary),
+              ),
+            ],
+          ),
           const SizedBox(height: 20),
-          Text(providerRateLabel(row),
-              style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
+          _heading('Rates'),
+          _rates(),
+          const SizedBox(height: 8),
           Text(
-              '${row['rating_average'] == null ? 'No ratings yet' : '${row['rating_average']} / 5'} · ${row['completed_job_count']} completed jobs'),
-          const SizedBox(height: 24),
-          const Text('Services',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-          for (final service in providerServices(row)) ...[
+            'Final quote shown before you send a request.',
+            style: TextStyle(color: sem.textSecondary, fontSize: 12),
+          ),
+          const SizedBox(height: 20),
+          _heading('Services'),
+          _services(),
+          if (bio?.trim().isNotEmpty == true) ...[
             const SizedBox(height: 14),
-            Text(service['name'] as String,
-                style: const TextStyle(fontWeight: FontWeight.w600)),
-            const SizedBox(height: 5),
-            Text((service['description'] as String?)?.trim().isNotEmpty == true
-                ? service['description'] as String
-                : 'Confirm specific tasks with the provider before work starts.'),
+            Card(
+              margin: EdgeInsets.zero,
+              elevation: 0,
+              color: sem.surface,
+              clipBehavior: Clip.antiAlias,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: BorderSide(color: sem.border),
+              ),
+              child: ExpansionTile(
+                title: const Text(
+                  'About this provider',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                shape: const Border(),
+                collapsedShape: const Border(),
+                childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+                expandedCrossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      bio!,
+                      style: TextStyle(color: sem.textSecondary),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ],
-          const SizedBox(height: 24),
-          const Text(
-              'This profile shows the latest information loaded in the directory. Rates are not a booking quote. Use Request cleaning on Home to choose your rental unit, service and time and check available providers.'),
-        ]),
-      );
+        ],
+      ),
+      bottomNavigationBar: SafeArea(
+        top: false,
+        bottom: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(18, 10, 18, 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: _requesting || widget.onRequestCleaning == null
+                      ? null
+                      : _request,
+                  icon: _requesting
+                      ? const SizedBox(
+                          width: 17,
+                          height: 17,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.event_available_outlined, size: 18),
+                  label: const Text('Request cleaning'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Availability checked for your unit and selected time.',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: sem.textSecondary, fontSize: 11),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

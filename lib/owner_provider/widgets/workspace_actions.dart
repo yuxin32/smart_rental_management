@@ -73,7 +73,12 @@ class WorkspaceActions {
                 context,
                 Builder(
                   builder: (detailContext) => ownerDestination(
-                      detailContext, 'browse', OwnerProviderDetails(row: row)),
+                      detailContext,
+                      'browse',
+                      OwnerProviderDetails(
+                        row: row,
+                        onRequestCleaning: () => request(detailContext),
+                      )),
                 )),
           )),
         ),

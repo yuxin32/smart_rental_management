@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:smart_rental_management/owner_provider/screens/owner_home_screen.dart';
+import 'package:smart_rental_management/owner_provider/screens/connected_booking_request_screen.dart';
 import 'package:smart_rental_management/owner_provider/main.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:smart_rental_management/owner_provider/screens/owner_workspace_dashboard.dart';
@@ -131,6 +132,7 @@ void main() {
           '/rest/v1/service_type' => [
               {'service_type_id': 'service-1', 'name': 'Cleaning'}
             ],
+          '/rest/v1/rpc/list_service_areas' => [],
           '/rest/v1/rpc/page_approved_provider_directory' => {
               'actor_id': actor,
               'items': [
@@ -295,6 +297,15 @@ void main() {
           scrollable: find.byType(Scrollable).first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('View profile'));
+      await tester.pumpAndSettle();
+      expect(find.text('Provider profile'), findsOneWidget);
+      expect(find.byType(OwnerWorkspaceNav), findsOneWidget);
+      expect(routes.routes.length, 3);
+      await tester.tap(find.widgetWithText(FilledButton, 'Request cleaning'));
+      await tester.pumpAndSettle();
+      expect(find.byType(ConnectedBookingRequestScreen), findsOneWidget);
+      expect(routes.routes.length, 4);
+      await tester.pageBack();
       await tester.pumpAndSettle();
       expect(find.text('Provider profile'), findsOneWidget);
       expect(find.byType(OwnerWorkspaceNav), findsOneWidget);
