@@ -113,7 +113,7 @@ class LoginPage extends StatelessWidget {
                         title: 'Administrator Login',
                         description:
                             'Manage tenant accounts, unit assignments, readings, billing, maintenance, announcements, and communication.',
-                        accentColor: const Color(0xFF7D55C7),
+                        accentColor: AppColors.primary,
                         onTap: () => Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => const AdminLoginPage(),
@@ -125,7 +125,7 @@ class LoginPage extends StatelessWidget {
                         icon: Icons.cleaning_services_outlined,
                         title: 'Owner & Cleaning Provider',
                         description: 'Properties, cleaning bookings, schedules, and communication.',
-                        accentColor: const Color(0xFF238A83),
+                        accentColor: AppColors.primary,
                         onTap: () => Navigator.of(context).push(MaterialPageRoute(
                           builder: (_) => cleaning.RentalAppDemo(backend: IntegratedBackend.instance),
                         )),

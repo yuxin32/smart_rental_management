@@ -1,14 +1,16 @@
 import 'package:flutter/material.dart';
 
+import 'brand_colors.dart';
+
 abstract final class AppColors {
-  static const primary = Color(0xFF5064D8);
-  static const headerStart = Color(0xFF4F63D7);
-  static const headerEnd = Color(0xFF58B5CD);
+  static const primary = BrandColors.primary;
+  static const headerStart = BrandColors.primary;
+  static const headerEnd = BrandColors.primaryLight;
   static const background = Color(0xFFF6F8FB);
-  static const heading = Color(0xFF13213A);
+  static const heading = BrandColors.primary;
   static const body = Color(0xFF5E687A);
-  static const success = Color(0xFF2FA36B);
-  static const warning = Color(0xFFE56B6F);
+  static const success = BrandColors.success;
+  static const warning = BrandColors.warning;
 }
 
 abstract final class AppTheme {

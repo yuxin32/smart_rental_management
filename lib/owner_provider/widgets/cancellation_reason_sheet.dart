@@ -48,7 +48,7 @@ const kCancellationReasons = <CancellationReason>[
       id: 'other',
       label: 'Other (tell us more)',
       icon: Icons.edit_note,
-      color: Color(0xFF315BC5)),
+      color: AppColors.info),
 ];
 
 const kProviderCancellationReasons = <CancellationReason>[
@@ -71,7 +71,7 @@ const kProviderCancellationReasons = <CancellationReason>[
       id: 'other',
       label: 'Other',
       icon: Icons.edit_note,
-      color: Color(0xFF315BC5)),
+      color: AppColors.info),
 ];
 
 String? bookingCancellationReason(

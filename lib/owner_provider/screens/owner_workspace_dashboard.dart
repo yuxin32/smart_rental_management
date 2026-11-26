@@ -44,7 +44,7 @@ class OwnerWorkspaceDashboard extends StatelessWidget {
   final Widget? bookingFollow;
   final Widget? pendingBookings;
 
-  static const navy = Color(0xFF172F67);
+  static const navy = AppColors.primary;
   static const sky = Color(0xFFB5DDF7);
 
   @override

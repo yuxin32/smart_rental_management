@@ -12,15 +12,16 @@
 // Elevation philosophy: Material 3 tonal surfaces + soft shadows.
 
 import 'package:flutter/material.dart';
+import '../../core/theme/brand_colors.dart';
 
 class AppColors {
   // Brand
-  static const Color primary = Color(0xFF172F67);
-  static const Color primaryLight = Color(0xFF315BC5);
+  static const Color primary = BrandColors.primary;
+  static const Color primaryLight = BrandColors.primaryLight;
   static const Color primaryLighter = Color(0xFFB5DDF7);
-  static const Color primarySurface = Color(0xFFEAF3FE);
-  static const Color primaryBorder = Color(0xFFD2E5F7);
-  static const Color primaryDark = Color(0xFF10244F);
+  static const Color primarySurface = BrandColors.primarySurface;
+  static const Color primaryBorder = BrandColors.primaryBorder;
+  static const Color primaryDark = BrandColors.primaryDark;
   // Restrained action accents. Primary actions remain navy; these are reserved
   // for semantic feedback and destructive choices rather than large CTAs.
   static const Color positive = Color(0xFF257A72);
@@ -39,7 +40,7 @@ class AppColors {
   static const Color surfaceLight = Color(0xFFFFFFFF);
   static const Color borderLight = Color(0xFFE1E9F4);
   static const Color borderStrongLight = Color(0xFFBECDE2);
-  static const Color textPrimaryLight = Color(0xFF172F67);
+  static const Color textPrimaryLight = BrandColors.primary;
   static const Color textSecondaryLight = Color(0xFF64738C);
   static const Color textTertiaryLight = Color(0xFF5F6F88);
 
@@ -70,10 +71,10 @@ class AppColors {
   static const Color statusCancelled = Color(0xFF991B1B);
 
   // Semantic
-  static const Color success = Color(0xFF4CAF50);
-  static const Color warning = Color(0xFFFB8C00);
+  static const Color success = BrandColors.success;
+  static const Color warning = BrandColors.warning;
   static const Color error = Color(0xFFE53935);
-  static const Color info = Color(0xFF315BC5);
+  static const Color info = BrandColors.primaryLight;
 }
 
 class AppSpacing {
@@ -192,7 +193,7 @@ class AppTheme {
   static const LinearGradient primaryGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [AppColors.primary, Color(0xFF254684)],
+    colors: [AppColors.primary, AppColors.primaryLight],
   );
 
   static const LinearGradient darkHeroGradient = LinearGradient(
