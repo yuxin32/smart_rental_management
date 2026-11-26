@@ -154,6 +154,9 @@ class _ConnectedWorkspaceScreenState extends State<ConnectedWorkspaceScreen>
           saveWeeklyHours: provider.replaceWeeklyHours,
           loadDayOffConstraints: provider.dayOffConstraints,
           load: provider.loadSetup,
+          loadPackages: widget.backend.cleaningPackages.myPackages,
+          savePackage: (draft, base) =>
+              widget.backend.cleaningPackages.savePackage(draft, base: base),
           saveServices: provider.replaceCapabilities,
           addUnavailableDate: provider.addUnavailableDate,
           removeUnavailableDate: provider.removeUnavailableDate,
@@ -172,6 +175,8 @@ class _ConnectedWorkspaceScreenState extends State<ConnectedWorkspaceScreen>
           loadServiceTypes: owner.serviceTypes,
           findEligible: owner.eligibleProviders,
           findMatches: owner.findMatches,
+          findPackageMatches: widget.backend.cleaningPackages.findPackageMatches,
+          createPackagePending: widget.backend.cleaningPackages.createPackagePending,
           loadServiceAreas: owner.locations.areas,
           savePropertyLocation: owner.savePropertyLocation,
           createPending: widget.backend.bookings.createPending,

@@ -4,6 +4,8 @@ import 'package:intl/intl.dart';
 import '../services/backend/safe_diagnostics.dart';
 
 import '../features/availability/domain/provider_setup.dart';
+import '../features/availability/domain/cleaning_package.dart';
+import '../widgets/provider_cleaning_packages.dart';
 import '../services/backend/connected_failure_message.dart';
 import '../widgets/connected_state_panel.dart';
 import '../widgets/connected_action_feedback.dart';
@@ -26,6 +28,8 @@ class ConnectedProviderSetupScreen extends StatefulWidget {
     required this.removeUnavailableDate,
     required this.loadDayOffConstraints,
     this.bottomNavigationBar,
+    this.loadPackages,
+    this.savePackage,
   });
 
   final Future<ProviderSetupData> Function() load;
@@ -34,6 +38,8 @@ class ConnectedProviderSetupScreen extends StatefulWidget {
   final Future<ProviderWeeklyState> Function() loadWeeklyHours;
   final SaveProviderWeek saveWeeklyHours;
   final Widget? bottomNavigationBar;
+  final Future<List<CleaningPackage>> Function()? loadPackages;
+  final SaveCleaningPackage? savePackage;
   final Future<void> Function(String) addUnavailableDate;
   final Future<void> Function(String) removeUnavailableDate;
   final Future<ProviderDayOffConstraints> Function(DateTime, DateTime)
@@ -56,6 +62,8 @@ class _ConnectedProviderSetupScreenState
   bool _checkingDates = false;
   bool _retryDates = false;
   bool _weeklyBusy = false;
+  bool _packageBusy = false;
+  bool _showWorkingHours = false;
   String? _error;
   ConnectedActionNotice? _notice;
 
@@ -284,6 +292,246 @@ class _ConnectedProviderSetupScreenState
     );
   }
 
+  bool get _packagesConfigured =>
+      widget.loadPackages != null && widget.savePackage != null;
+
+  Future<void> _manageDaysOff() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, updateSheet) {
+          final dates = (_last?.unavailableDates.toList() ?? <String>[])
+            ..sort();
+          Future<void> run(Future<void> Function() action) async {
+            await action();
+            try {
+              await _future;
+            } catch (_) {
+              /* Parent shows verification error. */
+            }
+            if (sheetContext.mounted) updateSheet(() {});
+          }
+
+          return SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Days off',
+                            style: Theme.of(context).textTheme.titleLarge,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Close days off',
+                          onPressed: () => Navigator.pop(sheetContext),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ],
+                    ),
+                    if (dates.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 12),
+                        child: Text('No days off added.'),
+                      ),
+                    for (final date in dates)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          DateFormat(
+                            'EEE, d MMM yyyy',
+                          ).format(DateTime.parse(date)),
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Remove unavailable date $date',
+                          onPressed: _busy ||
+                                  _weeklyBusy ||
+                                  _packageBusy ||
+                                  !_fresh
+                              ? null
+                              : () => run(
+                                    () => _confirmRemoval(
+                                      'Remove day off?',
+                                      () => widget.removeUnavailableDate(date),
+                                    ),
+                                  ),
+                          icon: const Icon(Icons.close),
+                        ),
+                      ),
+                    OutlinedButton.icon(
+                      onPressed: _busy ||
+                              _weeklyBusy ||
+                              _packageBusy ||
+                              _checkingDates ||
+                              !_fresh
+                          ? null
+                          : () => run(_addUnavailableDate),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add day off'),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Dates with confirmed jobs cannot be blocked.',
+                      style: TextStyle(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  List<Widget> _compactContents(ProviderSetupData data) {
+    final disabled =
+        _busy || _weeklyBusy || _packageBusy || _checkingDates || !_fresh;
+    Widget tab(String label, bool selected, VoidCallback onTap) => Expanded(
+          child: selected
+              ? FilledButton(
+                  onPressed: disabled ? null : onTap, child: Text(label))
+              : OutlinedButton(
+                  onPressed: disabled ? null : onTap,
+                  child: Text(label),
+                ),
+        );
+    return [
+      Row(
+        children: [
+          tab(
+            'Packages',
+            !_showWorkingHours,
+            () => setState(() => _showWorkingHours = false),
+          ),
+          const SizedBox(width: 8),
+          tab(
+            'Working hours',
+            _showWorkingHours,
+            () => setState(() => _showWorkingHours = true),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+      if (!_showWorkingHours) ...[
+        ProviderCleaningPackages(
+          key: const ValueKey('provider-cleaning-packages'),
+          services: data.services,
+          selectedServices: data.selectedServiceIds,
+          load: widget.loadPackages!,
+          save: widget.savePackage!,
+          enabled: _fresh && !_busy && !_weeklyBusy,
+          onBusyChanged: (busy) {
+            if (mounted) setState(() => _packageBusy = busy);
+          },
+        ),
+        const SizedBox(height: 12),
+        ExpansionTile(
+          key: const ValueKey('package-service-capabilities'),
+          tilePadding: EdgeInsets.zero,
+          title: const Text('Services offered'),
+          children: [
+            for (final service in data.services)
+              CheckboxListTile(
+                key: Key('service-${service.name}'),
+                contentPadding: EdgeInsets.zero,
+                title: Text(service.name),
+                value: _selectedServices.contains(service.id),
+                secondary:
+                    data.weeklyState?.requiredServices.contains(service.id) ==
+                            true
+                        ? const Icon(Icons.lock_outline, size: 18)
+                        : null,
+                onChanged: disabled ||
+                        data.weeklyState?.requiredServices.contains(
+                              service.id,
+                            ) ==
+                            true
+                    ? null
+                    : (checked) => setState(() {
+                          if (checked == true) {
+                            _selectedServices.add(service.id);
+                          } else {
+                            _selectedServices.remove(service.id);
+                          }
+                        }),
+              ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: disabled ||
+                        _selectedServices.isEmpty ||
+                        setEquals(_selectedServices, data.selectedServiceIds)
+                    ? null
+                    : () => _run(
+                          () => widget.saveServices(Set.of(_selectedServices)),
+                          working: 'Saving cleaning services',
+                          saved: 'Cleaning services saved.',
+                        ),
+                icon: const Icon(Icons.save_outlined),
+                label: const Text('Save services'),
+              ),
+            ),
+          ],
+        ),
+      ] else ...[
+        ProviderWeeklyHoursEditor(
+          key: const ValueKey('provider-weekly-hours'),
+          data: data,
+          enabled: _fresh && !_busy && !_packageBusy && !_checkingDates,
+          loadFresh: widget.loadWeeklyHours,
+          save: widget.saveWeeklyHours,
+          onSaved: () => _refresh(preserveServices: true, keepNotice: true),
+          onBusyChanged: (busy) {
+            if (mounted) setState(() => _weeklyBusy = busy);
+          },
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                'Days off · ${data.unavailableDates.length}',
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ),
+            TextButton(
+              onPressed: disabled ? null : _manageDaysOff,
+              child: const Text('Manage'),
+            ),
+          ],
+        ),
+        const Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.shield_outlined, size: 16),
+            SizedBox(width: 7),
+            Expanded(
+              child: Text(
+                'Confirmed bookings are protected.',
+                style: TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      ],
+      if (_error != null && _notice == null)
+        Text(
+          _error!,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -294,7 +542,7 @@ class _ConnectedProviderSetupScreenState
         actions: [
           IconButton(
             tooltip: 'Refresh availability',
-            onPressed: _busy || _weeklyBusy || _verifying || _checkingDates
+            onPressed: _busy || _weeklyBusy || _packageBusy || _verifying || _checkingDates
                 ? null
                 : _refresh,
             icon: const Icon(Icons.refresh),
@@ -362,6 +610,7 @@ class _ConnectedProviderSetupScreenState
                         key: const PageStorageKey('services-availability-form'),
                         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
                         children: [
+                          if (_packagesConfigured) ..._compactContents(data) else ...[
                           _buildSection(context, 'Cleaning services',
                               Icons.cleaning_services_outlined, [
                             if (data.services.isEmpty)
@@ -514,6 +763,7 @@ class _ConnectedProviderSetupScreenState
                           if (_error != null && _notice == null)
                             Text(_error!,
                                 style: TextStyle(color: scheme.error)),
+                          ],
                         ],
                       )))
             ]);

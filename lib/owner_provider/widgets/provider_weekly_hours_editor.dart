@@ -28,9 +28,11 @@ class ProviderWeeklyHoursEditor extends StatefulWidget {
 }
 
 class _ProviderWeeklyHoursEditorState extends State<ProviderWeeklyHoursEditor> {
-  int _day = 1;
+  final _expandedDays = <int>{};
   ProviderWeeklyState? _override;
   bool _busy = false, _needsCheck = false, _error = false;
+  bool _sheetOpen = false;
+  VoidCallback? _refreshSheet;
   String? _notice;
   Map<int, List<ProviderWorkingRange>>? _pending;
   ProviderWeeklyState? get _state => _override ?? widget.data.weeklyState;
@@ -42,20 +44,29 @@ class _ProviderWeeklyHoursEditorState extends State<ProviderWeeklyHoursEditor> {
     super.didUpdateWidget(oldWidget);
     if (!_busy &&
         oldWidget.data.weeklyState != widget.data.weeklyState &&
-        widget.data.weeklyState != null) _override = widget.data.weeklyState;
+        widget.data.weeklyState != null) {
+      _override = widget.data.weeklyState;
+    }
+    if (_sheetOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _refreshSheet?.call();
+      });
+    }
   }
 
   void _working(bool value) {
     if (mounted) setState(() => _busy = value);
+    _refreshSheet?.call();
     widget.onBusyChanged(value);
   }
 
   void _message(String message, {bool error = false}) {
-    if (mounted)
+    if (mounted) {
       setState(() {
         _notice = message;
         _error = error;
       });
+    }
   }
 
   Future<ProviderWeeklyState?> _check({bool verification = false}) async {
@@ -212,7 +223,9 @@ class _ProviderWeeklyHoursEditorState extends State<ProviderWeeklyHoursEditor> {
     if (!await _confirm(
         'Remove this time slot?',
         'The other working hours for ${providerWeekdays[day - 1]} stay unchanged.',
-        'Remove')) return;
+        'Remove')) {
+      return;
+    }
     await _commit({day: ranges}, state);
   }
 
@@ -231,7 +244,9 @@ class _ProviderWeeklyHoursEditorState extends State<ProviderWeeklyHoursEditor> {
     if (!await _confirm(
         'Set ${providerWeekdays[day - 1]} as not working?',
         'This removes all recurring time slots for this weekday. For a single date off, use Days off below.',
-        'Set not working')) return;
+        'Set not working')) {
+      return;
+    }
     await _commit({day: []}, state);
   }
 
@@ -256,191 +271,192 @@ class _ProviderWeeklyHoursEditorState extends State<ProviderWeeklyHoursEditor> {
     await _commit({for (final target in targets) target: ranges}, state);
   }
 
-  @override
-  Widget build(BuildContext context) {
+  Future<void> _openDay(int day) async {
+    final state = await _check();
+    if (!mounted || state == null) return;
+    var sheetBusy = false;
+    setState(() => _sheetOpen = true);
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        useSafeArea: true,
+        constraints: const BoxConstraints(maxWidth: 560),
+        builder: (sheetContext) => StatefulBuilder(
+          builder: (context, updateSheet) {
+            _refreshSheet = () {
+              if (context.mounted) updateSheet(() {});
+            };
+            Future<void> run(Future<void> Function() action) async {
+              if (sheetBusy) return;
+              updateSheet(() => sheetBusy = true);
+              try {
+                await action();
+              } finally {
+                if (context.mounted) updateSheet(() => sheetBusy = false);
+              }
+            }
+
+            return WorkingDaySheet(
+              day: day,
+              state: _state!,
+              enabled: _enabled && !sheetBusy,
+              busy: _busy,
+              notice: _buildNotice(
+                  onCheck: () => run(() async {
+                        await _check(verification: true);
+                      }),
+                  busy: sheetBusy),
+              onEdit: (slotId) => run(() => _edit(day, slotId: slotId)),
+              onRemove: (slotId) => run(() => _remove(day, slotId)),
+              onToggle: (work) => run(() => _toggle(day, work)),
+              onCopy: () => run(() => _copy(day)),
+            );
+          },
+        ),
+      );
+    } finally {
+      _refreshSheet = null;
+      if (mounted) setState(() => _sheetOpen = false);
+    }
+  }
+
+  Widget _buildNotice({VoidCallback? onCheck, bool busy = false}) {
+    if (_notice == null) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
-    final slots = _slots.where((slot) => slot.weekday == _day).toList()
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Semantics(
+        liveRegion: true,
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _error ? scheme.errorContainer : scheme.primaryContainer,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_notice!,
+                  style: TextStyle(
+                      color: _error
+                          ? scheme.onErrorContainer
+                          : scheme.onPrimaryContainer)),
+              if (_needsCheck)
+                TextButton(
+                    onPressed: _busy || busy || !widget.enabled
+                        ? null
+                        : onCheck ?? () => _check(verification: true),
+                    child: const Text('Check saved hours')),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _dayRow(int day) {
+    final slots = _slots.where((slot) => slot.weekday == day).toList()
       ..sort((a, b) => a.startMinute.compareTo(b.startMinute));
-    final required =
-        _state?.required.where((item) => item.weekday == _day).toList() ?? [];
-    final jobs = _state?.countFor(_day) ?? 0;
-    final dayName = Text(providerWeekdays[_day - 1],
-        style: Theme.of(context).textTheme.titleMedium);
-    final copyAction = TextButton.icon(
-        onPressed: _enabled && slots.isNotEmpty ? () => _copy(_day) : null,
-        icon: const Icon(Icons.copy_outlined, size: 16),
-        label: const Text('Copy'));
-    final workToggle = Row(mainAxisSize: MainAxisSize.min, children: [
-      Text(slots.isEmpty ? 'Off' : 'Working',
-          style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant)),
-      Tooltip(
-          message: jobs > 0
-              ? 'Keep working hours for confirmed jobs'
-              : 'Working on ${providerWeekdays[_day - 1]}',
-          child: Switch(
-              value: slots.isNotEmpty,
-              onChanged: !_enabled || jobs > 0
-                  ? null
-                  : (value) => _toggle(_day, value)))
-    ]);
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      const Text('Repeats weekly · MYT'),
-      const SizedBox(height: 14),
-      LayoutBuilder(builder: (context, constraints) {
-        final columns = MediaQuery.textScalerOf(context).scale(1) > 1.3 ? 4 : 7;
-        final width = (constraints.maxWidth - (columns - 1) * 5) / columns;
-        return Wrap(spacing: 5, runSpacing: 7, children: [
-          for (var day = 1; day <= 7; day++)
-            SizedBox(
-                width: width,
-                child: Semantics(
-                    label:
-                        '${providerWeekdays[day - 1]}, ${_slots.where((slot) => slot.weekday == day).length} time slots',
-                    selected: day == _day,
-                    child: OutlinedButton(
-                      key: ValueKey('working-weekday-$day'),
-                      onPressed:
-                          _busy ? null : () => setState(() => _day = day),
-                      style: OutlinedButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 8, horizontal: 0),
-                          backgroundColor:
-                              day == _day ? scheme.primary : scheme.surface,
-                          foregroundColor:
-                              day == _day ? scheme.onPrimary : scheme.onSurface,
-                          side: BorderSide(
-                              color: day == _day
-                                  ? scheme.primary
-                                  : scheme.outlineVariant)),
-                      child: Column(mainAxisSize: MainAxisSize.min, children: [
-                        Text(providerWeekdays[day - 1].substring(0, 3),
-                            style: const TextStyle(fontSize: 12)),
-                      ]),
-                    )))
-        ]);
-      }),
-      const SizedBox(height: 16),
-      if (_busy)
-        const Padding(
-            padding: EdgeInsets.only(bottom: 12),
-            child: LinearProgressIndicator()),
-      if (_notice != null)
+    final expanded = _expandedDays.contains(day);
+    final jobs = _state?.countFor(day) ?? 0;
+    final theme = Theme.of(context);
+    final label = Text(providerWeekdays[day - 1].substring(0, 3),
+        semanticsLabel: providerWeekdays[day - 1],
+        style:
+            theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600));
+    final edit = IconButton(
+      key: ValueKey('edit-working-day-$day'),
+      tooltip: 'Edit ${providerWeekdays[day - 1]} hours',
+      onPressed: _enabled ? () => _openDay(day) : null,
+      icon: const Icon(Icons.edit_outlined, size: 19),
+    );
+    final times = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (slots.isEmpty)
+          Text('Not working',
+              style: TextStyle(color: theme.colorScheme.onSurfaceVariant)),
+        for (final slot in expanded ? slots : slots.take(2))
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Text(workingRangeLabel(
+                ProviderWorkingRange(slot.startMinute, slot.endMinute))),
+          ),
+        if (slots.length > 2)
+          TextButton(
+            key: ValueKey('expand-working-day-$day'),
+            onPressed: () => setState(() {
+              if (expanded) {
+                _expandedDays.remove(day);
+              } else {
+                _expandedDays.add(day);
+              }
+            }),
+            style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: const Size(44, 44),
+                alignment: Alignment.centerLeft),
+            child: Text(expanded ? 'Show less' : '+${slots.length - 2} more',
+                semanticsLabel: expanded
+                    ? 'Show fewer ${providerWeekdays[day - 1]} working hours'
+                    : 'Show ${slots.length - 2} more ${providerWeekdays[day - 1]} working hours'),
+          ),
+        if (jobs > 0)
+          Text('$jobs confirmed ${jobs == 1 ? 'job' : 'jobs'}',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+      ],
+    );
+    return Column(
+      key: ValueKey('working-weekday-$day'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
         Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Semantics(
-                liveRegion: true,
-                child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                        color: _error
-                            ? scheme.errorContainer
-                            : scheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(12)),
-                    child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(_notice!,
-                              style: TextStyle(
-                                  color: _error
-                                      ? scheme.onErrorContainer
-                                      : scheme.onPrimaryContainer)),
-                          if (_needsCheck)
-                            TextButton(
-                                onPressed: _busy || !widget.enabled
-                                    ? null
-                                    : () => _check(verification: true),
-                                child: const Text('Check saved hours')),
-                        ])))),
-      LayoutBuilder(builder: (context, constraints) {
-        final scale = MediaQuery.textScalerOf(context).scale(1);
-        if (constraints.maxWidth < 300 * scale) {
-          return Column(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: LayoutBuilder(builder: (context, constraints) {
+            final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+            if (constraints.maxWidth < 280 * scale) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [Expanded(child: label), edit]),
+                  times,
+                ],
+              );
+            }
+            return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                dayName,
-                Wrap(
-                    spacing: 12,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: [copyAction, workToggle]),
-              ]);
-        }
-        return Row(
-            children: [Expanded(child: dayName), copyAction, workToggle]);
-      }),
-      Card(
-          margin: EdgeInsets.zero,
-          clipBehavior: Clip.antiAlias,
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-            if (slots.isEmpty)
-              const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Text('Not working on this weekday.')),
-            for (final slot in slots)
-              Builder(builder: (context) {
-                final remaining = [
-                  for (final other in slots)
-                    if (other.id != slot.id)
-                      ProviderWorkingRange(other.startMinute, other.endMinute)
-                ];
-                final protected = _state?.validateDay(_day, remaining) != null;
-                return Column(mainAxisSize: MainAxisSize.min, children: [
-                  if (slot != slots.first) const Divider(height: 1),
-                  ListTile(
-                    title: Text(workingRangeLabel(ProviderWorkingRange(
-                        slot.startMinute, slot.endMinute))),
-                    subtitle: Text(slot.endMinute - slot.startMinute < 120
-                        ? 'Under 2 hours · update this slot'
-                        : '${((slot.endMinute - slot.startMinute) / 60).toStringAsFixed((slot.endMinute - slot.startMinute) % 60 == 0 ? 0 : 1)} hours'),
-                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(
-                          key: ValueKey('edit-working-slot-${slot.id}'),
-                          tooltip: 'Edit time slot',
-                          onPressed: _enabled
-                              ? () => _edit(_day, slotId: slot.id)
-                              : null,
-                          icon: const Icon(Icons.edit_outlined, size: 19)),
-                      IconButton(
-                          tooltip: protected
-                              ? 'Required by confirmed jobs'
-                              : 'Remove time slot',
-                          onPressed: !_enabled || protected
-                              ? null
-                              : () => _remove(_day, slot.id),
-                          icon: Icon(
-                              protected
-                                  ? Icons.lock_outline
-                                  : Icons.delete_outline,
-                              size: 19)),
-                    ]),
-                  ),
-                ]);
-              }),
-            const Divider(height: 1),
-            OutlinedButton.icon(
-                onPressed: _enabled ? () => _edit(_day) : null,
-                icon: const Icon(Icons.add),
-                label: const Text('Add time slot')),
-          ])),
-      if (jobs > 0)
-        Padding(
-            padding: const EdgeInsets.only(top: 10),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Icon(Icons.lock_outline, size: 16),
-              const SizedBox(width: 6),
-              Expanded(
-                  child: Text(
-                      '${jobs == 1 ? '1 upcoming job' : '$jobs upcoming jobs'} · keep ' +
-                          required
-                              .take(3)
-                              .map((item) =>
-                                  '${workingTime(item.start)}–${workingTime(item.end)}')
-                              .join(', ') +
-                          (required.length > 3
-                              ? ' and ${required.length - 3} other required times available.'
-                              : ' available.'),
-                      style: Theme.of(context).textTheme.bodySmall)),
-            ])),
-    ]);
+                SizedBox(
+                    width: 56 * scale,
+                    child: Padding(
+                        padding: const EdgeInsets.only(top: 4), child: label)),
+                Expanded(
+                    child: Padding(
+                        padding: const EdgeInsets.only(top: 2), child: times)),
+                edit,
+              ],
+            );
+          }),
+        ),
+        const Divider(height: 1),
+      ],
+    );
   }
+
+  @override
+  Widget build(BuildContext context) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text('Repeats weekly · MYT'),
+          const SizedBox(height: 8),
+          if (_busy && !_sheetOpen)
+            const Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: LinearProgressIndicator()),
+          if (!_sheetOpen) _buildNotice(),
+          for (var day = 1; day <= 7; day++) _dayRow(day),
+        ],
+      );
 }

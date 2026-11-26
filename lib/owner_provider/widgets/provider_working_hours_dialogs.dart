@@ -16,6 +16,173 @@ String workingTime(int minute) =>
 String workingRangeLabel(ProviderWorkingRange range) =>
     '${workingTime(range.start)} – ${workingTime(range.end)}';
 
+/// Day-level controls stay in a sheet so the weekly overview stays compact.
+class WorkingDaySheet extends StatelessWidget {
+  const WorkingDaySheet({
+    super.key,
+    required this.day,
+    required this.state,
+    required this.enabled,
+    required this.busy,
+    required this.notice,
+    required this.onEdit,
+    required this.onRemove,
+    required this.onToggle,
+    required this.onCopy,
+  });
+
+  final int day;
+  final ProviderWeeklyState state;
+  final bool enabled, busy;
+  final Widget notice;
+  final ValueChanged<String?> onEdit;
+  final ValueChanged<String> onRemove;
+  final ValueChanged<bool> onToggle;
+  final VoidCallback onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final slots = state.slots.where((slot) => slot.weekday == day).toList()
+      ..sort((a, b) => a.startMinute.compareTo(b.startMinute));
+    final jobs = state.countFor(day);
+    final required = state.required.where((item) => item.weekday == day);
+    final theme = Theme.of(context);
+    return ConstrainedBox(
+      constraints:
+          BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * .85),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(children: [
+                Expanded(
+                    child: Text('${providerWeekdays[day - 1]} hours',
+                        style: theme.textTheme.titleLarge)),
+                IconButton(
+                    tooltip: 'Close day editor',
+                    onPressed: busy ? null : () => Navigator.pop(context),
+                    icon: const Icon(Icons.close)),
+              ]),
+              const Text('Repeats weekly · MYT'),
+              const SizedBox(height: 8),
+              if (busy) const LinearProgressIndicator(),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      notice,
+                      Wrap(
+                        alignment: WrapAlignment.spaceBetween,
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        children: [
+                          Row(mainAxisSize: MainAxisSize.min, children: [
+                            Text(slots.isEmpty ? 'Off' : 'Working'),
+                            Tooltip(
+                              message: jobs > 0
+                                  ? 'Keep working hours for confirmed jobs'
+                                  : 'Working on ${providerWeekdays[day - 1]}',
+                              child: Switch(
+                                  value: slots.isNotEmpty,
+                                  onChanged:
+                                      enabled && jobs == 0 ? onToggle : null),
+                            ),
+                          ]),
+                          TextButton.icon(
+                              key: ValueKey('copy-working-day-$day'),
+                              onPressed:
+                                  enabled && slots.isNotEmpty ? onCopy : null,
+                              icon: const Icon(Icons.copy_outlined, size: 16),
+                              label: const Text('Copy')),
+                        ],
+                      ),
+                      if (slots.isEmpty)
+                        const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Text('Not working on this weekday.')),
+                      for (final slot in slots)
+                        Builder(builder: (context) {
+                          final remaining = [
+                            for (final other in slots)
+                              if (other.id != slot.id)
+                                ProviderWorkingRange(
+                                    other.startMinute, other.endMinute)
+                          ];
+                          final protected =
+                              state.validateDay(day, remaining) != null;
+                          return Column(children: [
+                            const Divider(height: 1),
+                            Row(children: [
+                              Expanded(
+                                child: Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 8),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(workingRangeLabel(
+                                          ProviderWorkingRange(slot.startMinute,
+                                              slot.endMinute))),
+                                      if (slot.endMinute - slot.startMinute <
+                                          120)
+                                        Text('Under 2 hours · update this slot',
+                                            style: theme.textTheme.bodySmall),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                  key: ValueKey('edit-working-slot-${slot.id}'),
+                                  tooltip: 'Edit time slot',
+                                  onPressed:
+                                      enabled ? () => onEdit(slot.id) : null,
+                                  icon: const Icon(Icons.edit_outlined,
+                                      size: 19)),
+                              IconButton(
+                                  key: ValueKey(
+                                      'remove-working-slot-${slot.id}'),
+                                  tooltip: protected
+                                      ? 'Required by confirmed jobs'
+                                      : 'Remove time slot',
+                                  onPressed: enabled && !protected
+                                      ? () => onRemove(slot.id)
+                                      : null,
+                                  icon: Icon(
+                                      protected
+                                          ? Icons.lock_outline
+                                          : Icons.delete_outline,
+                                      size: 19)),
+                            ]),
+                          ]);
+                        }),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                          onPressed: enabled ? () => onEdit(null) : null,
+                          icon: const Icon(Icons.add, size: 18),
+                          label: const Text('Add time slot')),
+                      if (jobs > 0) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                            '${jobs == 1 ? '1 confirmed job' : '$jobs confirmed jobs'} · keep ${required.map((item) => '${workingTime(item.start)}–${workingTime(item.end)}').join(', ')} available.',
+                            style: theme.textTheme.bodySmall),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class WorkingRangeDialog extends StatefulWidget {
   const WorkingRangeDialog(
       {super.key,
@@ -179,10 +346,11 @@ class _CopyWorkingHoursDialogState extends State<CopyWorkingHoursDialog> {
                     onChanged: source || error != null
                         ? null
                         : (checked) => setState(() {
-                              if (checked == true)
+                              if (checked == true) {
                                 _selected.add(day);
-                              else
+                              } else {
                                 _selected.remove(day);
+                              }
                             }),
                   );
                 }),

@@ -56,6 +56,10 @@ class EligibleProviderItem {
     this.displayName,
     this.distanceKm,
     this.activeJobCount,
+    this.packageId,
+    this.cleanerCount,
+    this.durationMinutes,
+    this.packageScope,
   });
 
   final String providerId;
@@ -70,6 +74,10 @@ class EligibleProviderItem {
   final String? displayName;
   final double? distanceKm;
   final int? activeJobCount;
+  final String? packageId;
+  final int? cleanerCount;
+  final int? durationMinutes;
+  final String? packageScope;
 
   factory EligibleProviderItem.fromJson(Map<String, dynamic> row) =>
       EligibleProviderItem(
@@ -85,6 +93,10 @@ class EligibleProviderItem {
         displayName: row['full_name'] as String?,
         distanceKm: _distance(row['distance_km']),
         activeJobCount: (row['active_job_count'] as num?)?.toInt(),
+        packageId: row['package_id'] as String?,
+        cleanerCount: (row['cleaner_count'] as num?)?.toInt(),
+        durationMinutes: (row['duration_minutes'] as num?)?.toInt(),
+        packageScope: row['package_scope'] as String?,
       );
   static double? _distance(dynamic value) {
     if (value == null) return null;

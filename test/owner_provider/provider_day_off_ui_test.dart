@@ -118,7 +118,8 @@ void main() {
       writes++;
     });
     await open(tester);
-    await tester.tap(find.byIcon(Icons.edit_outlined));
+    await tester.tap(find.descendant(of: find.byType(DatePickerDialog),
+        matching: find.byIcon(Icons.edit_outlined)));
     await tester.pumpAndSettle();
     final input = find.descendant(
         of: find.byType(DatePickerDialog),

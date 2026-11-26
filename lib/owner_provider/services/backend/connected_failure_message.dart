@@ -47,6 +47,10 @@ abstract final class ConnectedFailureMessage {
           'This provider no longer covers your rental unit’s area. Search again for providers who cover it.',
         'price_changed' =>
           'The quoted price changed. Search again to review the new amount.',
+        'package_changed' =>
+          'This package changed. Search again to review its latest price and included cleaning.',
+        'package_unavailable' =>
+          'This package is no longer offered. Choose another package or provider.',
         'slot_conflict' ||
         'availability' =>
           'This provider is no longer free for the selected time. Choose another time or provider.',

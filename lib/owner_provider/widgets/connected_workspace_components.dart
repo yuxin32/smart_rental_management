@@ -407,11 +407,25 @@ class ConnectedBookingCard extends StatelessWidget {
             if (quoted is num) ...[
               const SizedBox(height: 7),
               Text(
-                  '${timePassed ? 'Quoted fee' : 'Quoted cleaning fee'} · RM ${quoted.toStringAsFixed(2)}',
+                  '${row['quote_basis'] == 'package' ? 'Package total' : timePassed ? 'Quoted fee' : 'Quoted cleaning fee'} · RM ${quoted.toStringAsFixed(2)}',
                   style: TextStyle(
                     color: colors.textPrimary,
                     fontWeight: FontWeight.w600,
                   )),
+            ],
+            if (row['quote_basis'] == 'package' &&
+                row['cleaner_count'] is int && row['duration_minutes'] is int) ...[
+              const SizedBox(height: 5),
+              Text('${row['cleaner_count']} ${row['cleaner_count'] == 1 ? 'cleaner' : 'cleaners'} · ${(row['duration_minutes'] as int) ~/ 60} hours',
+                  style: TextStyle(color: colors.textSecondary)),
+              if (row['package_scope'] is String &&
+                  (row['package_scope'] as String).trim().isNotEmpty)
+                ExpansionTile(tilePadding: EdgeInsets.zero,
+                    title: const Text('Included cleaning'),
+                    children: [Align(alignment: Alignment.centerLeft,
+                      child: Padding(padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(row['package_scope'] as String,
+                          style: TextStyle(color: colors.textSecondary))))]),
             ],
             if (!timePassed) ...[
               const SizedBox(height: 12),

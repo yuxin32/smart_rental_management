@@ -39,6 +39,8 @@ class ConnectedBookingRequestScreen extends StatefulWidget {
     this.now,
     this.initialPropertyId,
     this.findMatches,
+    this.findPackageMatches,
+    this.createPackagePending,
     this.loadServiceAreas,
     this.savePropertyLocation,
   });
@@ -70,6 +72,28 @@ class ConnectedBookingRequestScreen extends StatefulWidget {
       required String serviceTypeId,
       required DateTime start,
       required DateTime end})? findMatches;
+
+  /// Supplying this callback enables duration-based package selection.
+  /// Legacy callers keep the original manual interval flow.
+  final Future<ProviderSearchResult> Function({
+    required String propertyId,
+    required String serviceTypeId,
+    required DateTime start,
+    required DateTime end,
+    required int cleanerCount,
+  })? findPackageMatches;
+  final Future<BookingCreationOutcome> Function({
+    required String clientRequestId,
+    required String providerId,
+    required String propertyId,
+    required String serviceTypeId,
+    required DateTime start,
+    required DateTime end,
+    required num expectedAmount,
+    required String expectedBasis,
+    required String instructions,
+    required String packageId,
+  })? createPackagePending;
   final Future<List<ServiceAreaOption>> Function()? loadServiceAreas;
   final Future<void> Function(String id, int revision, String area, String pin)?
       savePropertyLocation;
@@ -88,6 +112,12 @@ class _ConnectedBookingRequestScreenState
   DateTime? _day;
   TimeOfDay? _start;
   TimeOfDay? _end;
+  int _cleanerCount = 1;
+  int _durationMinutes = 240;
+  bool _packageEdited = false;
+  bool get _packageMode => widget.findPackageMatches != null;
+  String get _packageSize =>
+      '$_cleanerCount ${_cleanerCount == 1 ? 'cleaner' : 'cleaners'} · ${_durationMinutes ~/ 60} hrs';
   List<EligibleProviderItem>? _eligible;
   List<AlternativeProviderTime> _alternatives = const [];
   bool _locationRequired = false;
@@ -100,6 +130,7 @@ class _ConnectedBookingRequestScreenState
   String? _requestToken;
   bool _searching = false;
   bool _searchFailed = false;
+  bool _confirmingAlternative = false;
   bool _submitting = false;
   bool _verifyingSubmission = false;
   String? _message;
@@ -125,6 +156,13 @@ class _ConnectedBookingRequestScreenState
       widget.loadServiceTypes(),
     ]);
     _properties = result[0];
+    if (_packageMode && _serviceTypeId == null && result[1].isNotEmpty) {
+      final standard = result[1]
+          .where((s) => s['name'].toString().toLowerCase().contains('standard'))
+          .firstOrNull;
+      _serviceTypeId =
+          (standard ?? result[1].first)['service_type_id'] as String;
+    }
     if (_propertyId != null &&
         !result[0].any((p) => p['property_id'] == _propertyId))
       _propertyId = null;
@@ -139,6 +177,10 @@ class _ConnectedBookingRequestScreenState
   void _changed(VoidCallback update) {
     setState(() {
       update();
+      if (_packageMode) {
+        _packageEdited = true;
+        _syncPackageEnd();
+      }
       _requestVersion++;
       _eligible = null;
       _alternatives = const [];
@@ -151,6 +193,35 @@ class _ConnectedBookingRequestScreenState
       _searchFailed = false;
     });
   }
+
+  (int, int) get _unitWindow {
+    final property =
+        _properties.where((p) => p['property_id'] == _propertyId).firstOrNull;
+    return (
+      parseTimeSlot(property?['cleaning_window_start']?.toString()) ?? 0,
+      parseTimeSlot(property?['cleaning_window_end']?.toString()) ?? 1439,
+    );
+  }
+
+  void _syncPackageEnd() {
+    final start = _start;
+    final (first, last) = _unitWindow;
+    if (start == null ||
+        timeOfDayMinutes(start) < first ||
+        timeOfDayMinutes(start) + _durationMinutes > last) {
+      _start = null;
+      _end = null;
+      return;
+    }
+    final minute = timeOfDayMinutes(start) + _durationMinutes;
+    _end = TimeOfDay(hour: minute ~/ 60, minute: minute % 60);
+  }
+
+  bool _matchesPackage(EligibleProviderItem provider) =>
+      provider.quoteBasis == 'package' &&
+      provider.packageId?.isNotEmpty == true &&
+      provider.cleanerCount == _cleanerCount &&
+      provider.durationMinutes == _durationMinutes;
 
   @override
   void dispose() {
@@ -190,7 +261,7 @@ class _ConnectedBookingRequestScreenState
         : math.max(
             windowStart, _start == null ? 0 : timeOfDayMinutes(_start!) + 1);
     final last = start
-        ? windowEnd - 1
+        ? windowEnd - (_packageMode ? _durationMinutes : 1)
         : math.min(
             windowEnd, _start == null ? 1439 : timeOfDayMinutes(_start!) + 480);
     final today = (widget.now?.call() ?? DateTime.now())
@@ -212,9 +283,14 @@ class _ConnectedBookingRequestScreenState
           ? (_start ?? const TimeOfDay(hour: 9, minute: 0))
           : (_end ??
               TimeOfDay(hour: endDefault ~/ 60, minute: endDefault % 60)),
-      title: start ? 'Requested start time' : 'Requested end time',
-      description:
-          'Within your unit’s cleaning window. Provider availability is checked when you search. MYT (UTC+8).',
+      title: _packageMode
+          ? 'Choose start time'
+          : start
+              ? 'Requested start time'
+              : 'Requested end time',
+      description: _packageMode
+          ? '$_packageSize · Cleaning window ${timeSlotLabel(windowStart)}–${timeSlotLabel(windowEnd)} MYT. Provider availability is checked when you search.'
+          : 'Within your unit’s cleaning window. Provider availability is checked when you search. MYT (UTC+8).',
       firstMinute: first,
       lastMinute: last,
     );
@@ -246,7 +322,9 @@ class _ConnectedBookingRequestScreenState
         day == null ||
         start == null ||
         end == null) {
-      setState(() => _message = 'Choose a unit, service, date and both times.');
+      setState(() => _message = _packageMode
+          ? 'Choose a unit, service, date and start time.'
+          : 'Choose a unit, service, date and both times.');
       return;
     }
     final startAt = malaysiaBookingInstant(day, start);
@@ -261,6 +339,16 @@ class _ConnectedBookingRequestScreenState
       setState(() => _message = 'Service duration cannot exceed 8 hours.');
       return;
     }
+    if (_packageMode) {
+      final (first, last) = _unitWindow;
+      if (timeOfDayMinutes(start) < first ||
+          timeOfDayMinutes(end) > last ||
+          endAt.difference(startAt).inMinutes != _durationMinutes) {
+        setState(() => _message =
+            'Choose a start time that fits your unit’s cleaning window.');
+        return;
+      }
+    }
     final searchVersion = _requestVersion;
     setState(() {
       _searching = true;
@@ -271,13 +359,20 @@ class _ConnectedBookingRequestScreenState
       _requestToken = null;
     });
     try {
-      final result = widget.findMatches == null
-          ? null
-          : await widget.findMatches!(
+      final result = _packageMode
+          ? await widget.findPackageMatches!(
               propertyId: propertyId,
               serviceTypeId: serviceTypeId,
               start: startAt,
-              end: endAt);
+              end: endAt,
+              cleanerCount: _cleanerCount)
+          : widget.findMatches == null
+              ? null
+              : await widget.findMatches!(
+                  propertyId: propertyId,
+                  serviceTypeId: serviceTypeId,
+                  start: startAt,
+                  end: endAt);
       final found = result?.current ??
           await widget.findEligible(
             propertyId: propertyId,
@@ -287,8 +382,16 @@ class _ConnectedBookingRequestScreenState
           );
       if (!mounted || searchVersion != _requestVersion) return;
       setState(() {
-        _eligible = found;
-        _alternatives = result?.alternatives ?? const [];
+        _eligible =
+            _packageMode ? found.where(_matchesPackage).toList() : found;
+        _alternatives =
+            (result?.alternatives ?? const <AlternativeProviderTime>[])
+                .where((offer) =>
+                    !_packageMode ||
+                    (_matchesPackage(offer.provider) &&
+                        offer.end.difference(offer.start).inMinutes ==
+                            _durationMinutes))
+                .toList();
         _locationRequired = result?.locationRequired ?? false;
         _areaName = result?.areaName;
         _step = 2;
@@ -317,6 +420,12 @@ class _ConnectedBookingRequestScreenState
         serviceTypeId == null ||
         start == null ||
         end == null) return;
+    if (_packageMode &&
+        (widget.createPackagePending == null || !_matchesPackage(provider))) {
+      setState(() => _message =
+          'Package booking is unavailable. Refresh and check providers again.');
+      return;
+    }
     final token = _requestToken ?? BookingRequestToken.newV4();
     setState(() {
       _requestToken = token;
@@ -325,18 +434,34 @@ class _ConnectedBookingRequestScreenState
       _message = null;
     });
     try {
-      await widget.createPending(
-        clientRequestId: token,
-        providerId: provider.providerId,
-        propertyId: propertyId,
-        serviceTypeId: serviceTypeId,
-        start: start,
-        end: end,
-        expectedAmount: provider.quotedAmount,
-        expectedBasis: provider.quoteBasis,
-        instructions: bookingRequestInstructions(
-            _instructions.text, _additionalTasks.text),
-      );
+      final instructions =
+          bookingRequestInstructions(_instructions.text, _additionalTasks.text);
+      if (_packageMode) {
+        await widget.createPackagePending!(
+          clientRequestId: token,
+          providerId: provider.providerId,
+          propertyId: propertyId,
+          serviceTypeId: serviceTypeId,
+          start: start,
+          end: end,
+          expectedAmount: provider.quotedAmount,
+          expectedBasis: 'package',
+          instructions: instructions,
+          packageId: provider.packageId!,
+        );
+      } else {
+        await widget.createPending(
+          clientRequestId: token,
+          providerId: provider.providerId,
+          propertyId: propertyId,
+          serviceTypeId: serviceTypeId,
+          start: start,
+          end: end,
+          expectedAmount: provider.quotedAmount,
+          expectedBasis: provider.quoteBasis,
+          instructions: instructions,
+        );
+      }
       if (mounted) {
         _saved = true;
         _submitting = false;
@@ -416,42 +541,66 @@ class _ConnectedBookingRequestScreenState
   }
 
   Future<void> _useAlternative(AlternativeProviderTime offer) async {
+    if (_packageMode &&
+        (!_matchesPackage(offer.provider) ||
+            offer.end.difference(offer.start).inMinutes != _durationMinutes))
+      return;
     if (_searching ||
         _submitting ||
+        _confirmingAlternative ||
         _searchedStart == null ||
         _searchedEnd == null) return;
-    final agreed = await showDialog<bool>(
+    _confirmingAlternative = true;
+    bool? agreed;
+    try {
+      agreed = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
-                scrollable: true,
-                title: const Text('Use this alternative time?'),
-                content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Your selected time'),
-                      const SizedBox(height: 6),
-                      Text(_intervalLabel(_searchedStart!, _searchedEnd!)),
-                      const Divider(height: 28),
-                      const Text('New time'),
-                      const SizedBox(height: 6),
-                      Text(_intervalLabel(offer.start, offer.end),
-                          style: const TextStyle(fontWeight: FontWeight.w700)),
-                      const SizedBox(height: 14),
-                      Text(
-                          'Quoted cleaning fee · RM ${offer.provider.quotedAmount.toStringAsFixed(2)}'),
-                      const SizedBox(height: 10),
-                      const Text(
-                          'Availability and price will be checked again. No request is sent until you review and submit.')
-                    ]),
-                actions: [
-                  TextButton(
-                      onPressed: () => Navigator.pop(c, false),
-                      child: const Text('Keep my time')),
-                  FilledButton(
-                      onPressed: () => Navigator.pop(c, true),
-                      child: const Text('Change time & continue'))
-                ]));
+          scrollable: true,
+          title: const Text('Change appointment time?'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('Your requested time'),
+              const SizedBox(height: 6),
+              Text(_intervalLabel(_searchedStart!, _searchedEnd!)),
+              const Divider(height: 28),
+              const Text('New time'),
+              const SizedBox(height: 6),
+              Text(
+                _intervalLabel(offer.start, offer.end),
+                style: const TextStyle(fontWeight: FontWeight.w700),
+              ),
+              const SizedBox(height: 14),
+              Text(
+                offer.provider.displayName?.trim().isNotEmpty == true
+                    ? offer.provider.displayName!
+                    : 'Cleaning provider',
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Total quote · RM ${offer.provider.quotedAmount.toStringAsFixed(2)}',
+              ),
+              const SizedBox(height: 10),
+              const Text('Availability and price will be checked again.'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(c, false),
+              child: const Text('Keep my time'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Use time & review'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      _confirmingAlternative = false;
+    }
     if (!mounted || agreed != true) return;
     final start = offer.start.toUtc().add(const Duration(hours: 8)),
         end = offer.end.toUtc().add(const Duration(hours: 8));
@@ -464,7 +613,9 @@ class _ConnectedBookingRequestScreenState
     await _search();
     if (!mounted || version != _requestVersion || _searchFailed) return;
     final confirmed = _eligible
-        ?.where((p) => p.providerId == offer.provider.providerId)
+        ?.where((p) =>
+            p.providerId == offer.provider.providerId &&
+            (!_packageMode || p.packageId == offer.provider.packageId))
         .firstOrNull;
     setState(() {
       if (confirmed == null) {
@@ -473,8 +624,7 @@ class _ConnectedBookingRequestScreenState
       } else {
         _selectedProvider = confirmed;
         _step = 3;
-        _message =
-            'Availability checked again. Review the current quote before sending.';
+        _message = null;
         _top();
       }
     });
@@ -484,11 +634,201 @@ class _ConnectedBookingRequestScreenState
       ? 'Select time'
       : '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
 
+  Widget _compactPackageForm(_RequestOptions options) {
+    final property =
+        options.properties.firstWhere((p) => p['property_id'] == _propertyId);
+    final service = options.serviceTypes
+        .where((s) => s['service_type_id'] == _serviceTypeId)
+        .firstOrNull;
+    final deep =
+        service?['name'].toString().toLowerCase().contains('deep') == true;
+    final hours = deep ? const [4, 6, 8] : const [2, 3, 4];
+    final (first, last) = _unitWindow;
+    final fitsWindow = last - first >= _durationMinutes;
+    final colors = Theme.of(context).colorScheme;
+    Widget field(String label, Widget child) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(label, style: Theme.of(context).textTheme.labelLarge),
+            const SizedBox(height: 6),
+            child
+          ],
+        );
+    Widget pair(Widget left, Widget right, {bool crew = false}) =>
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+            if (constraints.maxWidth < 280 * scale) {
+              return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [left, const SizedBox(height: 12), right]);
+            }
+            return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              if (crew)
+                SizedBox(width: 112 * scale, child: left)
+              else
+                Expanded(child: left),
+              const SizedBox(width: 10),
+              Expanded(child: right),
+            ]);
+          },
+        );
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Icon(Icons.apartment_outlined, size: 22),
+        const SizedBox(width: 10),
+        Expanded(
+            child:
+                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(
+              '${workspaceText(property['unit_name'] as String)}, ${workspaceText(property['building_name'] as String)}',
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          Text(
+              'Cleaning window · ${timeSlotLabel(first)}–${timeSlotLabel(last)} MYT',
+              style: Theme.of(context).textTheme.bodySmall),
+        ])),
+      ]),
+      const SizedBox(height: 18),
+      DropdownButtonFormField<String>(
+        key: const Key('request-service'),
+        isExpanded: true,
+        initialValue: _serviceTypeId,
+        decoration: const InputDecoration(labelText: 'Service', isDense: true),
+        items: options.serviceTypes
+            .map((s) => DropdownMenuItem(
+                  value: s['service_type_id'] as String,
+                  child: Text(s['name'] as String,
+                      maxLines: 1, overflow: TextOverflow.ellipsis),
+                ))
+            .toList(),
+        onChanged: (value) => _changed(() {
+          _serviceTypeId = value;
+          _durationMinutes = 240;
+        }),
+      ),
+      const SizedBox(height: 16),
+      pair(
+        field(
+            'Cleaners',
+            DropdownButtonFormField<int>(
+              key: const Key('request-cleaners'),
+              initialValue: _cleanerCount,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                  isDense: true,
+                  contentPadding:
+                      EdgeInsets.symmetric(horizontal: 10, vertical: 12)),
+              items: [
+                for (var count = 1; count <= 4; count++)
+                  DropdownMenuItem(
+                      value: count,
+                      child: Text(
+                          '$count ${count == 1 ? 'cleaner' : 'cleaners'}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis))
+              ],
+              onChanged: (value) {
+                if (value != null) _changed(() => _cleanerCount = value);
+              },
+            )),
+        field(
+            'Duration',
+            Wrap(spacing: 6, runSpacing: 4, children: [
+              for (final hour in hours)
+                ChoiceChip(
+                  key: ValueKey('request-duration-$hour'),
+                  label: Text('$hour hrs'),
+                  labelPadding: const EdgeInsets.symmetric(horizontal: 2),
+                  showCheckmark: false,
+                  selected: _durationMinutes == hour * 60,
+                  onSelected: (_) =>
+                      _changed(() => _durationMinutes = hour * 60),
+                ),
+            ])),
+        crew: true,
+      ),
+      const SizedBox(height: 16),
+      pair(
+        field(
+            'Date',
+            OutlinedButton.icon(
+              key: const Key('request-date'),
+              onPressed: _pickDay,
+              style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 48),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 12)),
+              icon: const Icon(Icons.calendar_month_outlined, size: 18),
+              label: Text(_day == null
+                  ? 'Select date'
+                  : DateFormat('d MMM yyyy').format(_day!)),
+            )),
+        field(
+            'Start time · MYT',
+            OutlinedButton.icon(
+              key: const Key('request-start'),
+              onPressed:
+                  _day == null || !fitsWindow ? null : () => _pickTime(true),
+              style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 48),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 12)),
+              icon: const Icon(Icons.schedule_outlined, size: 18),
+              label: Text(_timeLabel(_start)),
+            )),
+      ),
+      const SizedBox(height: 12),
+      Semantics(
+          liveRegion: true,
+          child: Container(
+            key: const Key('package-end-summary'),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+                color: colors.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(10)),
+            child: Wrap(
+                spacing: 14,
+                runSpacing: 6,
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                      _end == null
+                          ? 'End time calculated automatically'
+                          : 'Ends at ${_timeLabel(_end)}',
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  Text(_packageSize),
+                ]),
+          )),
+      if (!fitsWindow)
+        const Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: Text(
+              'This duration does not fit your unit’s cleaning window. Choose a shorter duration or another unit.'),
+        ),
+      if (_day == null)
+        const Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: Text('Choose a date to select a start time.'),
+        ),
+      const SizedBox(height: 16),
+      Text('Price shown after matching',
+          style: Theme.of(context).textTheme.bodySmall),
+      const SizedBox(height: 8),
+      FilledButton.icon(
+        key: const Key('request-check-packages'),
+        onPressed: _searching || !fitsWindow ? null : _search,
+        icon: const Icon(Icons.search),
+        label: Text(_searching ? 'Checking availability…' : 'Check providers'),
+      ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) => UnsavedChangesGuard(
       dirty: () =>
           !_saved &&
-          (_serviceTypeId != null ||
+          ((_packageMode ? _packageEdited : _serviceTypeId != null) ||
               _day != null ||
               _instructions.text.isNotEmpty ||
               _additionalTasks.text.isNotEmpty),
@@ -562,12 +902,19 @@ class _ConnectedBookingRequestScreenState
                     LinearProgressIndicator(value: (_step + 1) / 4),
                     const SizedBox(height: 12),
                     Text(
-                        const [
-                          'Unit & service',
-                          'Date & time',
-                          'Choose provider',
-                          'Review & send'
-                        ][_step],
+                        (_packageMode
+                            ? const [
+                                'Choose unit',
+                                'Service & time',
+                                'Choose provider',
+                                'Review & send'
+                              ]
+                            : const [
+                                'Unit & service',
+                                'Date & time',
+                                'Choose provider',
+                                'Review & send'
+                              ])[_step],
                         style: const TextStyle(
                             fontSize: 22, fontWeight: FontWeight.w800)),
                     if (_step > 0)
@@ -632,31 +979,33 @@ class _ConnectedBookingRequestScreenState
                             _changed(() => _propertyId = value),
                       ),
                       const SizedBox(height: 14),
-                      DropdownButtonFormField<String>(
-                        key: const Key('request-service'),
-                        isExpanded: true,
-                        value: _serviceTypeId,
-                        decoration: InputDecoration(
-                            labelText: 'Cleaning service',
-                            errorText:
-                                _validateDetails && _serviceTypeId == null
-                                    ? 'Choose a cleaning service.'
-                                    : null),
-                        items: options.serviceTypes.map((row) {
-                          final label = row['name'] as String;
-                          return DropdownMenuItem(
-                            value: row['service_type_id'] as String,
-                            child: Tooltip(
-                              message: label,
-                              child: Text(label,
-                                  maxLines: 1, overflow: TextOverflow.ellipsis),
-                            ),
-                          );
-                        }).toList(),
-                        onChanged: (value) =>
-                            _changed(() => _serviceTypeId = value),
-                      ),
-                      if (widget.findMatches != null &&
+                      if (!_packageMode)
+                        DropdownButtonFormField<String>(
+                          key: const Key('request-service'),
+                          isExpanded: true,
+                          value: _serviceTypeId,
+                          decoration: InputDecoration(
+                              labelText: 'Cleaning service',
+                              errorText:
+                                  _validateDetails && _serviceTypeId == null
+                                      ? 'Choose a cleaning service.'
+                                      : null),
+                          items: options.serviceTypes.map((row) {
+                            final label = row['name'] as String;
+                            return DropdownMenuItem(
+                              value: row['service_type_id'] as String,
+                              child: Tooltip(
+                                message: label,
+                                child: Text(label,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                            );
+                          }).toList(),
+                          onChanged: (value) =>
+                              _changed(() => _serviceTypeId = value),
+                        ),
+                      if ((widget.findMatches != null || _packageMode) &&
                           _propertyId != null) ...[
                         const SizedBox(height: 12),
                         Text(
@@ -666,7 +1015,7 @@ class _ConnectedBookingRequestScreenState
                             icon: const Icon(Icons.location_on_outlined),
                             label: const Text('Set rental location')),
                       ],
-                      if (_serviceTypeId != null) ...[
+                      if (!_packageMode && _serviceTypeId != null) ...[
                         const SizedBox(height: 12),
                         CleaningServiceScope(
                           description: options.serviceTypes.firstWhere((row) =>
@@ -680,16 +1029,20 @@ class _ConnectedBookingRequestScreenState
                             setState(() {
                               _validateDetails = true;
                               if (_propertyId != null &&
-                                  _serviceTypeId != null) {
+                                  (_packageMode || _serviceTypeId != null)) {
                                 _step = 1;
                                 _top();
                                 _message = null;
                               }
                             });
                           },
-                          child: const Text('Continue to date & time')),
+                          child: Text(_packageMode
+                              ? 'Continue to service & time'
+                              : 'Continue to date & time')),
                     ],
-                    if (_step == 1) ...[
+                    if (_step == 1 && _packageMode)
+                      _compactPackageForm(options),
+                    if (_step == 1 && !_packageMode) ...[
                       Semantics(
                         button: true,
                         label: _day == null
@@ -777,59 +1130,8 @@ class _ConnectedBookingRequestScreenState
                           onAction: _search,
                         ),
                     ],
-                    if (_step == 2 && _eligible != null) ...[
-                      const SizedBox(height: 22),
-                      if (widget.findMatches != null) _requestSummary(options),
-                      Text(
-                          widget.findMatches == null
-                              ? 'Eligible when checked · ${_eligible!.length}'
-                              : _locationRequired
-                                  ? 'Rental location required'
-                                  : 'Available at your time · ${_eligible!.length}',
-                          style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w800,
-                              color: Theme.of(context).colorScheme.primary)),
-                      const SizedBox(height: 5),
-                      const Text(
-                          'These providers meet the requested service and time checks. Compare their rates and ratings before choosing. The quoted price is checked again when you submit.'),
-                      if (_locationRequired)
-                        ConnectedStatePanel(
-                            state: ConnectedViewState.empty,
-                            title: 'Set your rental location',
-                            message:
-                                'Choose this rental unit’s service area so we can find providers who cover it.',
-                            actionLabel: 'Set rental location',
-                            onAction: _editRentalLocation)
-                      else if (_eligible!.isEmpty)
-                        ConnectedStatePanel(
-                          state: ConnectedViewState.empty,
-                          title: 'No provider available for this time',
-                          message:
-                              'Try a different service time or cleaning type. You can also check this interval again.',
-                          actionLabel: widget.findMatches == null
-                              ? 'Change date & time'
-                              : null,
-                          onAction: widget.findMatches == null
-                              ? () => setState(() {
-                                    _step = 1;
-                                    _top();
-                                  })
-                              : null,
-                        ),
-                      ..._eligible!.map(_providerCard),
-                      if (_alternatives.isNotEmpty) ...[
-                        const SizedBox(height: 24),
-                        const Text('Other available times',
-                            style: TextStyle(
-                                fontSize: 18, fontWeight: FontWeight.w800)),
-                        const SizedBox(height: 6),
-                        const Text(
-                            'Suggested within 7 days of your selected date. These providers cover your area but require a time change. Your service and duration stay the same.'),
-                        ..._alternatives.map((offer) =>
-                            _providerCard(offer.provider, alternative: offer)),
-                      ],
-                    ],
+                    if (_step == 2 && _eligible != null)
+                      ..._providerResults(options),
                     if (_step == 3 && _selectedProvider != null)
                       _reviewCard(options),
                   ],
@@ -840,41 +1142,260 @@ class _ConnectedBookingRequestScreenState
         ),
       ));
 
-  Widget _requestSummary(_RequestOptions options) {
-    final property =
-        options.properties.firstWhere((p) => p['property_id'] == _propertyId);
-    final service = options.serviceTypes
-        .firstWhere((p) => p['service_type_id'] == _serviceTypeId);
-    return Card(
-        margin: const EdgeInsets.only(bottom: 20),
-        child: Padding(
-            padding: const EdgeInsets.all(16),
-            child:
-                Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(
-                  '${workspaceText(property['unit_name'] as String)}, ${workspaceText(property['building_name'] as String)}',
-                  style: const TextStyle(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 8),
-              Text(_areaName ??
-                  ((property['location'] as Map?)?['area_name'] as String? ??
-                      'Rental area not set')),
-              const SizedBox(height: 6),
-              Text(service['name'] as String),
-              const SizedBox(height: 6),
-              Text(_intervalLabel(_searchedStart!, _searchedEnd!)),
-              TextButton(
-                  onPressed: _searching
-                      ? null
-                      : () => setState(() {
-                            _step = 1;
-                            _top();
-                          }),
-                  child: const Text('Change date & time')),
-            ])));
+  void _changeRequestTime() {
+    if (_searching || _submitting) return;
+    setState(() {
+      _step = 1;
+      _message = null;
+      _top();
+    });
   }
 
-  Widget _providerCard(EligibleProviderItem provider,
-      {AlternativeProviderTime? alternative}) {
+  List<Widget> _providerResults(_RequestOptions options) {
+    final hasMatches = _eligible!.isNotEmpty;
+    return [
+      const SizedBox(height: 18),
+      _requestSummary(options),
+      if (_locationRequired)
+        ConnectedStatePanel(
+          state: ConnectedViewState.empty,
+          title: 'Set your rental location',
+          message:
+              'Choose an area to find providers who cover your rental unit.',
+          actionLabel: 'Set rental location',
+          onAction: _editRentalLocation,
+        )
+      else ...[
+        if (hasMatches) ...[
+          Text(
+            'Available at your time · ${_eligible!.length}',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 6),
+          const Text('Compare providers and choose one to review.'),
+          ..._eligible!.map(_providerCard),
+        ],
+        if (_alternatives.isNotEmpty) ...[
+          const SizedBox(height: 20),
+          Text(
+            hasMatches ? 'Other available times' : 'Try these available times',
+            style: Theme.of(context).textTheme.titleMedium,
+          ),
+          const SizedBox(height: 5),
+          Text(_packageMode
+              ? 'Same service · $_packageSize · Your area · Within 7 days'
+              : 'Same service · Your area · Within 7 days'),
+          ..._alternativeGroups(),
+        ] else if (!hasMatches)
+          ConnectedStatePanel(
+            state: ConnectedViewState.empty,
+            title: _packageMode
+                ? 'No matching package'
+                : widget.findMatches == null
+                    ? 'No provider available for this time'
+                    : 'No available times in the next 7 days',
+            message: _packageMode
+                ? 'Try another duration, crew size or date to check other packages.'
+                : 'Choose another date to search again.',
+          ),
+        const SizedBox(height: 18),
+        OutlinedButton.icon(
+          onPressed: _searching || _submitting ? null : _changeRequestTime,
+          icon: const Icon(Icons.calendar_month_outlined),
+          label: const Text('Choose another date & time'),
+        ),
+      ],
+    ];
+  }
+
+  Widget _requestSummary(_RequestOptions options) {
+    final property = options.properties.firstWhere(
+      (p) => p['property_id'] == _propertyId,
+    );
+    final service = options.serviceTypes.firstWhere(
+      (p) => p['service_type_id'] == _serviceTypeId,
+    );
+    final noAvailability = !_locationRequired && _eligible!.isEmpty;
+    final colors = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Icon(Icons.apartment_outlined, size: 22),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${workspaceText(property['unit_name'] as String)}, ${workspaceText(property['building_name'] as String)}',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '${service['name']} · ${_areaName ?? ((property['location'] as Map?)?['area_name'] as String? ?? 'Rental area not set')}',
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    const Text('Your requested time'),
+                    if (noAvailability)
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.warning.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'No availability',
+                          style: TextStyle(color: colors.onSurface),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _intervalLabel(_searchedStart!, _searchedEnd!),
+                  key: const Key('requested-time-summary'),
+                  style: const TextStyle(fontWeight: FontWeight.w600),
+                ),
+                if (_packageMode) Text(_packageSize),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  DateTime _malaysiaDay(DateTime instant) {
+    final local = instant.toUtc().add(const Duration(hours: 8));
+    return DateTime.utc(local.year, local.month, local.day);
+  }
+
+  List<Widget> _alternativeGroups() {
+    final sorted = [..._alternatives]
+      ..sort((a, b) => a.start.compareTo(b.start));
+    final groups = <DateTime, List<AlternativeProviderTime>>{};
+    for (final offer in sorted) {
+      groups.putIfAbsent(_malaysiaDay(offer.start), () => []).add(offer);
+    }
+    final requestedDay = _malaysiaDay(_searchedStart!);
+    return [
+      for (final entry in groups.entries) ...[
+        Padding(
+          padding: const EdgeInsets.only(top: 16, bottom: 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.calendar_today_outlined, size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 4,
+                  alignment: WrapAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      DateFormat('EEE, d MMM yyyy').format(entry.key),
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    if (entry.key.difference(requestedDay).inDays == 0)
+                      const Text('Same day')
+                    else if (entry.key.difference(requestedDay).inDays == 1)
+                      const Text('Next day'),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        for (final offer in entry.value) _alternativeCard(offer),
+      ],
+    ];
+  }
+
+  Widget _alternativeCard(AlternativeProviderTime offer) {
+    final provider = offer.provider;
+    final start = offer.start.toUtc().add(const Duration(hours: 8));
+    final end = offer.end.toUtc().add(const Duration(hours: 8));
+    final duration = offer.end.difference(offer.start).inMinutes;
+    final durationLabel = duration % 60 == 0
+        ? '${duration ~/ 60} hours'
+        : '${duration ~/ 60}h ${duration % 60}m';
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${DateFormat('h:mm a').format(start)}–${DateFormat('h:mm a').format(end)}',
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 12,
+              runSpacing: 6,
+              alignment: WrapAlignment.spaceBetween,
+              children: [
+                Text(
+                  provider.displayName?.trim().isNotEmpty == true
+                      ? provider.displayName!
+                      : 'Cleaning provider',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  'RM ${provider.quotedAmount.toStringAsFixed(2)}',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Serves ${_areaName ?? provider.serviceArea} · $durationLabel',
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _submitting || _searching
+                    ? null
+                    : () => _useAlternative(offer),
+                label: const Text('Choose this time'),
+                icon: const Icon(Icons.arrow_forward, size: 18),
+                iconAlignment: IconAlignment.end,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _providerCard(EligibleProviderItem provider) {
     final rates = [
       if (provider.hourlyRate != null) 'RM ${provider.hourlyRate}/hour',
       if (provider.dailyRate != null) 'RM ${provider.dailyRate}/day',
@@ -901,21 +1422,20 @@ class _ConnectedBookingRequestScreenState
             if (provider.distanceKm != null)
               Text(
                   'Approx. ${provider.distanceKm!.toStringAsFixed(1)} km to your rental unit'),
-            if (alternative != null) ...[
-              const SizedBox(height: 10),
-              const Chip(
-                  label: Text('Change time required'),
-                  avatar: Icon(Icons.schedule, size: 16)),
-              Text(_intervalLabel(alternative.start, alternative.end),
-                  style: const TextStyle(fontWeight: FontWeight.w600)),
-            ],
             if (provider.bio?.isNotEmpty == true) Text(provider.bio!),
             const SizedBox(height: 7),
-            Text(rates),
+            if (provider.quoteBasis != 'package') Text(rates),
+            if (provider.quoteBasis == 'package') ...[
+              Text(_packageSize),
+              if (provider.packageScope?.trim().isNotEmpty == true)
+                Text(provider.packageScope!),
+            ],
             const SizedBox(height: 7),
             Text(
-              'Quoted price · RM ${provider.quotedAmount.toStringAsFixed(2)} '
-              '(${provider.quoteBasis == 'daily' ? '8-hour day rate' : 'hourly rate'})',
+              provider.quoteBasis == 'package'
+                  ? 'Package total · RM ${provider.quotedAmount.toStringAsFixed(2)}'
+                  : 'Quoted price · RM ${provider.quotedAmount.toStringAsFixed(2)} '
+                      '(${provider.quoteBasis == 'daily' ? '8-hour day rate' : 'hourly rate'})',
               style: TextStyle(
                   color: Theme.of(context).colorScheme.primary,
                   fontWeight: FontWeight.w800),
@@ -927,20 +1447,14 @@ class _ConnectedBookingRequestScreenState
             OutlinedButton(
               onPressed: _submitting || _searching
                   ? null
-                  : alternative != null
-                      ? () => _useAlternative(alternative)
-                      : () => setState(() {
-                            _selectedProvider = provider;
-                            _step = 3;
-                            _top();
-                            _requestToken = null;
-                            _message = null;
-                          }),
-              child: Text(alternative != null
-                  ? 'Use this time'
-                  : selected
-                      ? 'Selected'
-                      : 'Select and review'),
+                  : () => setState(() {
+                        _selectedProvider = provider;
+                        _step = 3;
+                        _top();
+                        _requestToken = null;
+                        _message = null;
+                      }),
+              child: Text(selected ? 'Selected' : 'Select and review'),
             ),
           ],
         ),
@@ -974,13 +1488,18 @@ class _ConnectedBookingRequestScreenState
             Text('Date: ${_day!.day}/${_day!.month}/${_day!.year} · '
                 '${_timeLabel(_start)}–${_timeLabel(_end)} MYT'),
             Text('Provider area: ${provider.serviceArea}'),
+            if (_packageMode) Text(_packageSize),
+            if (provider.packageScope?.trim().isNotEmpty == true)
+              Text('Package scope: ${provider.packageScope!}'),
             const SizedBox(height: 8),
             Text(
                 'Total quoted amount: RM ${provider.quotedAmount.toStringAsFixed(2)}',
                 style: const TextStyle(fontWeight: FontWeight.w800)),
-            Text(provider.quoteBasis == 'daily'
-                ? 'Fixed 8-hour daily rate.'
-                : 'Hourly rate multiplied by booked time.'),
+            Text(provider.quoteBasis == 'package'
+                ? 'Total session price for the selected crew and duration.'
+                : provider.quoteBasis == 'daily'
+                    ? 'Fixed 8-hour daily rate.'
+                    : 'Hourly rate multiplied by booked time.'),
             const SizedBox(height: 12),
             TextField(
               key: const Key('booking-instructions'),

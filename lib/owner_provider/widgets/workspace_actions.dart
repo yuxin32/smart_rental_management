@@ -239,6 +239,8 @@ class WorkspaceActions {
       loadServiceTypes: owner.serviceTypes,
       findEligible: owner.eligibleProviders,
       findMatches: owner.findMatches,
+      findPackageMatches: backend.cleaningPackages.findPackageMatches,
+      createPackagePending: backend.cleaningPackages.createPackagePending,
       loadServiceAreas: owner.locations.areas,
       savePropertyLocation: owner.savePropertyLocation,
       createPending: backend.bookings.createPending,
@@ -285,6 +287,9 @@ class WorkspaceActions {
         loadDayOffConstraints: provider.dayOffConstraints,
         initialData: provider.cachedSetup,
         load: provider.loadSetup,
+        loadPackages: backend.cleaningPackages.myPackages,
+        savePackage: (draft, base) =>
+            backend.cleaningPackages.savePackage(draft, base: base),
         saveServices: provider.replaceCapabilities,
         addUnavailableDate: provider.addUnavailableDate,
         removeUnavailableDate: provider.removeUnavailableDate,

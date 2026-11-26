@@ -15,6 +15,7 @@ import 'auth_storage_factory.dart';
 import 'password_recovery_controller.dart';
 import 'recovery_link_listener.dart';
 import 'session_snapshot_cache.dart';
+import 'cleaning_package_repository.dart';
 
 /// Connected repositories share one authenticated client. This is separate
 /// from the in-memory preview stores until the shared schema is deployed.
@@ -42,6 +43,7 @@ class SupabaseBackendProvider {
     evidence = SupabaseEvidenceRepository(client, cache: cache);
     messages = SupabaseMessageRepository(client);
     reviews = SupabaseReviewRepository(client, snapshots: snapshots);
+    cleaningPackages = CleaningPackageRepository(client, snapshots: snapshots);
   }
 
   final SupabaseClient client;
@@ -58,6 +60,7 @@ class SupabaseBackendProvider {
   late final SupabaseEvidenceRepository evidence;
   late final SupabaseMessageRepository messages;
   late final SupabaseReviewRepository reviews;
+  late final CleaningPackageRepository cleaningPackages;
 
   static Future<SupabaseBackendProvider?> initialize(
     BackendConfig config, {

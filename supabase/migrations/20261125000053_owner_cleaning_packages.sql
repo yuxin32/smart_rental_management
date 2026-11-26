@@ -1,0 +1,625 @@
+-- Cleaning packages: no catalogue is seeded and no existing booking is repriced.
+-- Provider capacity remains one booking at a time regardless of crew size.
+-- Public legacy RPC signatures/JSON remain unchanged. Shared private cores below
+-- are the authoritative 022/050 implementations with an explicit package branch.
+-- Never deploy this migration from the local verification harness.
+
+create function app_private.cleaning_service_kind(p_name text) returns text
+language sql immutable set search_path='' as $$
+ select case
+  when n ~ '\mdeep\M' and (n ~ '\mclean' or n='deep') then 'deep'
+  when n in ('cleaning','standard','regular','basic','general','routine') or
+   (n ~ '\m(standard|regular|basic|general|routine)\M' and n ~ '\mclean') then 'standard'
+ end from (select btrim(regexp_replace(lower(p_name),'[^a-z0-9]+',' ','g')) n)s;
+$$;
+revoke all on function app_private.cleaning_service_kind(text) from public,anon,authenticated,service_role;
+
+create table app_private.cleaning_package (
+ package_id uuid primary key default gen_random_uuid(),
+ provider_id uuid not null references public.provider_profile(provider_id) on delete cascade,
+ service_type_id uuid not null references public.service_type(service_type_id),
+ service_kind text not null check(service_kind in ('standard','deep')),
+ duration_minutes integer not null,
+ cleaner_count integer not null check(cleaner_count between 1 and 4),
+ total_price numeric(10,2) not null check(total_price>0 and total_price<=99999999.99),
+ package_scope text not null check(length(btrim(package_scope)) between 1 and 2000),
+ enabled boolean not null,
+ revision bigint not null default 1 check(revision>0),
+ check((service_kind='standard' and duration_minutes in(120,180,240)) or
+       (service_kind='deep' and duration_minutes in(240,360,480))),
+ unique(provider_id,service_type_id,duration_minutes,cleaner_count)
+);
+alter table app_private.cleaning_package enable row level security;
+-- No table privileges or policies: every read/write is an authenticated RPC.
+revoke all on app_private.cleaning_package from public,anon,authenticated,service_role;
+
+create function public.my_cleaning_packages() returns jsonb
+language plpgsql stable security definer set search_path='' as $$
+begin
+ if not exists(select 1 from public.user_account a join public.provider_profile p on p.provider_id=a.user_id
+  where a.user_id=auth.uid() and a.role='provider') then
+  raise exception 'Provider session required' using errcode='42501';end if;
+ return coalesce((select jsonb_agg(to_jsonb(k)-'service_kind' order by k.service_type_id,k.duration_minutes,k.cleaner_count)
+  from app_private.cleaning_package k where k.provider_id=auth.uid()),'[]'::jsonb);
+end;$$;
+revoke all on function public.my_cleaning_packages() from public,anon,authenticated,service_role;
+grant execute on function public.my_cleaning_packages() to authenticated;
+
+-- Create: null package_id, expected_revision=0. Edit: own ID and exact revision.
+-- Identity is server assigned. Editing duration/crew keeps the same package ID.
+create function public.save_my_cleaning_package(
+ p_service_type_id uuid,p_duration_minutes integer,p_cleaner_count integer,
+ p_total_price numeric,p_package_scope text,p_enabled boolean,p_expected_revision bigint,
+ p_package_id uuid default null
+) returns jsonb language plpgsql security definer set search_path='' as $$
+declare k app_private.cleaning_package%rowtype;kind text;
+begin
+ if current_setting('transaction_isolation')<>'read committed' then
+  raise exception 'Package updates require Read Committed' using errcode='25001';end if;
+ perform 1 from public.provider_profile p join public.user_account a on a.user_id=p.provider_id
+  where p.provider_id=auth.uid() and a.role='provider' for update of p;
+ if not found then raise exception 'Provider session required' using errcode='42501';end if;
+ if p_package_id is null then
+  if p_expected_revision is distinct from 0::bigint then
+   raise exception 'Reload packages before saving' using errcode='PT409';end if;
+ else
+  select * into k from app_private.cleaning_package where package_id=p_package_id and provider_id=auth.uid() for update;
+  if not found then raise exception 'Package unavailable' using errcode='42501';end if;
+  if p_expected_revision is null or k.revision<>p_expected_revision then
+   raise exception 'Package changed; reload before saving' using errcode='PT409';end if;
+ end if;
+ select app_private.cleaning_service_kind(s.name) into kind from public.service_type s where s.service_type_id=p_service_type_id;
+ if kind is null or not exists(select 1 from public.provider_capability c
+   where c.provider_id=auth.uid() and c.service_type_id=p_service_type_id) then
+  raise exception 'Enable a supported cleaning service first' using errcode='22023';end if;
+ if p_duration_minutes is null or not ((kind='standard' and p_duration_minutes in(120,180,240)) or
+   (kind='deep' and p_duration_minutes in(240,360,480))) or
+   p_cleaner_count is null or p_cleaner_count not between 1 and 4 or
+   p_total_price is null or not(p_total_price>0 and p_total_price<=99999999.99) or
+   round(p_total_price,2)<>p_total_price or p_package_scope is null or
+   length(btrim(p_package_scope)) not between 1 and 2000 or p_enabled is null then
+  raise exception 'Invalid package duration, crew, total price or included scope' using errcode='22023';end if;
+ if p_package_id is null then
+  insert into app_private.cleaning_package(provider_id,service_type_id,service_kind,duration_minutes,cleaner_count,total_price,package_scope,enabled)
+   values(auth.uid(),p_service_type_id,kind,p_duration_minutes,p_cleaner_count,p_total_price,btrim(p_package_scope),p_enabled) returning * into k;
+ else
+  update app_private.cleaning_package set service_type_id=p_service_type_id,service_kind=kind,
+   duration_minutes=p_duration_minutes,cleaner_count=p_cleaner_count,total_price=p_total_price,
+   package_scope=btrim(p_package_scope),enabled=p_enabled,revision=revision+1
+   where package_id=p_package_id and provider_id=auth.uid() returning * into k;
+ end if;
+ return to_jsonb(k)-'service_kind';
+end;$$;
+revoke all on function public.save_my_cleaning_package(uuid,integer,integer,numeric,text,boolean,bigint,uuid)
+ from public,anon,authenticated,service_role;
+grant execute on function public.save_my_cleaning_package(uuid,integer,integer,numeric,text,boolean,bigint,uuid) to authenticated;
+
+alter table public.booking
+ add column package_id uuid,
+ add column package_revision bigint,
+ add column cleaner_count integer,
+ add column duration_minutes integer,
+ add column package_scope text;
+-- Snapshot ID deliberately has no FK: package deletion must never erase history.
+-- Preserve 022's completeness, duration and legacy daily/hourly constraints.
+alter table public.booking drop constraint booking_quote_basis_check;
+alter table public.booking add constraint booking_quote_basis_check check(quote_basis in('hourly','daily','package'));
+alter table public.booking add constraint booking_package_snapshot_complete check(
+ (package_id is null and package_revision is null and cleaner_count is null and duration_minutes is null and package_scope is null
+  and quote_basis is distinct from 'package') or
+ (package_id is not null and package_revision is not null and package_revision>0 and
+  cleaner_count is not null and cleaner_count between 1 and 4 and
+  duration_minutes is not null and duration_minutes in(120,180,240,360,480) and
+  package_scope is not null and length(btrim(package_scope)) between 1 and 2000 and
+  quote_basis is not null and quote_basis='package' and
+  quoted_duration_minutes is not null and duration_minutes=quoted_duration_minutes and
+  quoted_amount is not null and quoted_rate is not null and quoted_rate=quoted_amount)
+);
+
+create function app_private.guard_booking_package_snapshot() returns trigger
+language plpgsql set search_path='' as $$
+begin
+ -- Immutable even to trusted lifecycle RPCs and administrative price edits.
+ if new.package_id is distinct from old.package_id or new.package_revision is distinct from old.package_revision or
+    new.cleaner_count is distinct from old.cleaner_count or new.duration_minutes is distinct from old.duration_minutes or
+    new.package_scope is distinct from old.package_scope or
+    (old.package_id is not null and (new.quote_currency is distinct from old.quote_currency or
+     new.quote_basis is distinct from old.quote_basis or new.quoted_rate is distinct from old.quoted_rate or
+     new.quoted_amount is distinct from old.quoted_amount or new.quoted_duration_minutes is distinct from old.quoted_duration_minutes or
+     new.provider_id is distinct from old.provider_id or new.service_type_id is distinct from old.service_type_id)) then
+  raise exception 'Booking package snapshot is immutable' using errcode='42501';end if;
+ return new;
+end;$$;
+revoke all on function app_private.guard_booking_package_snapshot() from public,anon,authenticated,service_role;
+create trigger guard_booking_package_snapshot_before before update on public.booking
+ for each row execute function app_private.guard_booking_package_snapshot();
+
+-- The following shared core preserves the complete original 022 validation and
+-- retry path. Package arguments are private typed parameters, never client GUCs.
+create function app_private.create_pending_booking_core(
+  p_client_request_id uuid,
+  p_provider_id uuid,
+  p_property_id uuid,
+  p_service_type_id uuid,
+  p_start_at timestamptz,
+  p_end_at timestamptz,
+  p_expected_amount numeric,
+  p_expected_basis text,
+  p_instructions text,
+  p_package_id uuid default null,
+  p_expected_package_revision bigint default null
+)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare
+  v_package app_private.cleaning_package%rowtype;
+  v_actor uuid := auth.uid();
+  v_existing public.booking%rowtype;
+  v_property public.property%rowtype;
+  v_provider_status text;
+  v_hourly_rate numeric;
+  v_daily_rate numeric;
+  v_rate numeric;
+  v_basis text;
+  v_amount numeric(12,2);
+  v_seconds numeric;
+  v_minutes integer;
+  v_local_start timestamp;
+  v_local_end timestamp;
+  v_instructions text := coalesce(p_instructions, '');
+  v_booking_id uuid;
+begin
+  if v_actor is null or not exists (
+    select 1 from public.user_account a
+    where a.user_id = v_actor and a.role = 'owner'
+  ) then
+    raise exception 'Property Owner authentication is required'
+      using errcode = '42501';
+  end if;
+  if p_client_request_id is null or p_provider_id is null or
+     p_property_id is null or p_service_type_id is null or
+     p_start_at is null or p_end_at is null or
+     p_expected_amount is null or p_expected_basis is null then
+    raise exception 'Required booking fields are missing'
+      using errcode = '23514';
+  end if;
+
+  select * into v_existing from public.booking b
+  where b.owner_id = v_actor and
+        b.client_request_id = p_client_request_id;
+  if found then
+    if v_existing.package_id is distinct from p_package_id or
+       (p_package_id is not null and v_existing.package_revision is distinct from p_expected_package_revision) or
+       v_existing.provider_id <> p_provider_id or
+       v_existing.property_id <> p_property_id or
+       v_existing.service_type_id <> p_service_type_id or
+       v_existing.requested_start_at <> p_start_at or
+       v_existing.requested_end_at <> p_end_at or
+       v_existing.instructions <> v_instructions or
+       v_existing.quoted_amount is distinct from p_expected_amount or
+       v_existing.quote_basis is distinct from p_expected_basis then
+      raise exception 'Request token was reused with different details'
+        using errcode = '23514';
+    end if;
+    return jsonb_build_object('created', true,
+      'booking_id', v_existing.booking_id, 'reused', true,
+      'quoted_amount', v_existing.quoted_amount,
+      'quote_basis', v_existing.quote_basis,
+      'quote_currency', v_existing.quote_currency);
+  end if;
+
+  if p_start_at <= now() or p_end_at <= p_start_at then
+    return jsonb_build_object('created', false, 'reason', 'invalid_interval');
+  end if;
+  v_seconds := extract(epoch from (p_end_at - p_start_at));
+  if mod(v_seconds, 60) <> 0 or v_seconds < 60 or v_seconds > 28800 then
+    return jsonb_build_object('created', false, 'reason', 'invalid_duration');
+  end if;
+  v_minutes := (v_seconds / 60)::integer;
+
+  -- Lock the Provider before reading their current rate and operational data.
+  -- A later provider-rate edit does not alter this Booking's snapshot.
+  select p.approval_status, p.hourly_rate, p.daily_rate
+    into v_provider_status, v_hourly_rate, v_daily_rate
+  from public.provider_profile p
+  where p.provider_id = p_provider_id for update;
+  if v_provider_status is distinct from 'approved' then
+    return jsonb_build_object('created', false,
+                              'reason', 'provider_not_approved');
+  end if;
+
+  if p_package_id is not null then
+    select * into v_package from app_private.cleaning_package k
+     where k.package_id=p_package_id and k.provider_id=p_provider_id and k.service_type_id=p_service_type_id
+       and k.enabled and k.duration_minutes=v_minutes and
+       k.service_kind=(select app_private.cleaning_service_kind(s.name) from public.service_type s where s.service_type_id=p_service_type_id);
+    if not found then return jsonb_build_object('created',false,'reason','package_unavailable');end if;
+    if p_expected_package_revision is null or v_package.revision<>p_expected_package_revision then
+      return jsonb_build_object('created',false,'reason','package_changed');end if;
+    v_basis:='package';v_rate:=v_package.total_price;v_amount:=v_package.total_price;
+  else
+  if v_minutes = 480 and v_daily_rate > 0 then
+    v_basis := 'daily';
+    v_rate := v_daily_rate;
+    v_amount := v_daily_rate;
+  elsif v_hourly_rate > 0 then
+    v_basis := 'hourly';
+    v_rate := v_hourly_rate;
+    v_amount := round(v_hourly_rate * v_minutes / 60, 2);
+  else
+    return jsonb_build_object('created', false,
+                              'reason', 'rate_unavailable');
+  end if;
+  end if;
+  if v_amount <= 0 or p_expected_amount <> v_amount or
+     p_expected_basis <> v_basis then
+    return jsonb_build_object('created', false, 'reason', 'price_changed');
+  end if;
+
+  select * into v_property from public.property p
+  where p.property_id = p_property_id and p.owner_id = v_actor;
+  if not found then
+    return jsonb_build_object('created', false, 'reason', 'property');
+  end if;
+  v_local_start := p_start_at at time zone 'Asia/Kuala_Lumpur';
+  v_local_end := p_end_at at time zone 'Asia/Kuala_Lumpur';
+  if v_local_start::date <> v_local_end::date or
+     v_local_start::time < v_property.cleaning_window_start or
+     v_local_end::time > v_property.cleaning_window_end then
+    return jsonb_build_object('created', false, 'reason', 'rental_window');
+  end if;
+  if not exists (
+    select 1 from public.provider_capability c
+    where c.provider_id = p_provider_id and
+          c.service_type_id = p_service_type_id
+  ) then
+    return jsonb_build_object('created', false, 'reason', 'service_type');
+  end if;
+  if exists (
+    select 1 from public.provider_unavailable_date d
+    where d.provider_id = p_provider_id and
+          d.unavailable_on = v_local_start::date
+  ) or not exists (
+    select 1 from public.provider_weekly_slot s
+    where s.provider_id = p_provider_id and
+          s.weekday = extract(isodow from v_local_start)::integer and
+          s.end_time - s.start_time >= interval '2 hours' and
+          s.start_time <= v_local_start::time and
+          s.end_time >= v_local_end::time
+  ) then
+    return jsonb_build_object('created', false, 'reason', 'availability');
+  end if;
+  if exists (
+    select 1 from public.booking other
+    where other.provider_id = p_provider_id and
+          other.current_status in ('Accepted', 'In Progress') and
+          other.requested_start_at < p_end_at and
+          p_start_at < other.requested_end_at
+  ) then
+    return jsonb_build_object('created', false, 'reason', 'slot_conflict');
+  end if;
+
+  insert into public.booking (
+    owner_id, provider_id, property_id, service_type_id,
+    requested_start_at, requested_end_at, instructions,
+    current_status, client_request_id, quote_basis, quoted_rate,
+    quoted_duration_minutes, quoted_amount,
+    package_id,package_revision,cleaner_count,duration_minutes,package_scope
+  ) values (
+    v_actor, p_provider_id, p_property_id, p_service_type_id,
+    p_start_at, p_end_at, v_instructions,
+    'Pending', p_client_request_id, v_basis, v_rate,
+    v_minutes, v_amount,
+    v_package.package_id,v_package.revision,v_package.cleaner_count,v_package.duration_minutes,v_package.package_scope
+  ) on conflict (owner_id, client_request_id) do nothing
+  returning booking_id into v_booking_id;
+
+  if v_booking_id is null then
+    select * into v_existing from public.booking b
+    where b.owner_id = v_actor and
+          b.client_request_id = p_client_request_id;
+    if not found or v_existing.package_id is distinct from p_package_id or
+       (p_package_id is not null and v_existing.package_revision is distinct from p_expected_package_revision) or
+       v_existing.provider_id <> p_provider_id or
+       v_existing.property_id <> p_property_id or
+       v_existing.service_type_id <> p_service_type_id or
+       v_existing.requested_start_at <> p_start_at or
+       v_existing.requested_end_at <> p_end_at or
+       v_existing.instructions <> v_instructions or
+       v_existing.quoted_amount is distinct from p_expected_amount or
+       v_existing.quote_basis is distinct from p_expected_basis then
+      raise exception 'Request token was reused with different details'
+        using errcode = '23514';
+    end if;
+    return jsonb_build_object('created', true,
+      'booking_id', v_existing.booking_id, 'reused', true,
+      'quoted_amount', v_existing.quoted_amount,
+      'quote_basis', v_existing.quote_basis,
+      'quote_currency', v_existing.quote_currency);
+  end if;
+  return jsonb_build_object('created', true,
+    'booking_id', v_booking_id, 'reused', false,
+    'quoted_amount', v_amount, 'quote_basis', v_basis,
+    'quote_currency', 'MYR');
+end;
+$$;
+revoke all on function app_private.create_pending_booking_core(uuid,uuid,uuid,uuid,timestamptz,timestamptz,numeric,text,text,uuid,bigint)
+ from public,anon,authenticated,service_role;
+-- 050's public geography wrapper still invokes this exact legacy signature.
+create or replace function app_private.create_pending_booking(p_client_request_id uuid,p_provider_id uuid,p_property_id uuid,p_service_type_id uuid,
+ p_start_at timestamptz,p_end_at timestamptz,p_expected_amount numeric,p_expected_basis text,p_instructions text default '')
+returns jsonb language sql security definer set search_path='' as $$
+ select app_private.create_pending_booking_core(p_client_request_id,p_provider_id,p_property_id,p_service_type_id,
+  p_start_at,p_end_at,p_expected_amount,p_expected_basis,p_instructions);
+$$;
+revoke all on function app_private.create_pending_booking(uuid,uuid,uuid,uuid,timestamptz,timestamptz,numeric,text,text)
+ from public,anon,authenticated,service_role;
+
+create function public.create_pending_package_booking(p_client_request_id uuid,p_provider_id uuid,p_property_id uuid,p_service_type_id uuid,
+ p_start_at timestamptz,p_end_at timestamptz,p_package_id uuid,p_expected_amount numeric,p_expected_package_revision bigint,p_instructions text default '')
+returns jsonb language plpgsql security definer set search_path='' as $$
+declare reason text;r jsonb;b public.booking%rowtype;
+begin
+ if not exists(select 1 from public.user_account where user_id=auth.uid() and role='owner') then
+  raise exception 'Owner required' using errcode='42501';end if;
+ if p_package_id is null or p_expected_package_revision is null or p_expected_package_revision<1 then
+  raise exception 'Choose a current cleaning package' using errcode='23514';end if;
+ -- Same lock ordering as 050: property-location, then provider, then booking.
+ perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('property-location:'||p_property_id,0));
+ if not exists(select 1 from public.booking where owner_id=auth.uid() and client_request_id=p_client_request_id) then
+  if not exists(select 1 from public.property where property_id=p_property_id and owner_id=auth.uid()) then
+   raise exception 'Property unavailable' using errcode='42501';end if;
+  perform 1 from public.provider_profile where provider_id=p_provider_id for update;
+  reason:=app_private.location_gate(p_property_id,p_provider_id);
+  if reason is not null then return jsonb_build_object('created',false,'reason',reason);end if;
+  if p_start_at<=clock_timestamp() then return jsonb_build_object('created',false,'reason','invalid_interval');end if;
+ end if;
+ r:=app_private.create_pending_booking_core(p_client_request_id,p_provider_id,p_property_id,p_service_type_id,
+   p_start_at,p_end_at,p_expected_amount,'package',p_instructions,p_package_id,p_expected_package_revision);
+ if r->>'created'='true' then
+  select * into b from public.booking where booking_id=(r->>'booking_id')::uuid and owner_id=auth.uid();
+  r:=r||jsonb_build_object('package_id',b.package_id,'package_revision',b.package_revision,'cleaner_count',b.cleaner_count,
+   'duration_minutes',b.duration_minutes,'package_scope',b.package_scope);
+ end if;
+ return r;
+end;$$;
+revoke all on function public.create_pending_package_booking(uuid,uuid,uuid,uuid,timestamptz,timestamptz,uuid,numeric,bigint,text)
+ from public,anon,authenticated,service_role;
+grant execute on function public.create_pending_package_booking(uuid,uuid,uuid,uuid,timestamptz,timestamptz,uuid,numeric,bigint,text) to authenticated;
+
+create function app_private.find_eligible_providers_core(
+  p_property_id uuid,
+  p_service_type_id uuid,
+  p_start_at timestamptz,
+  p_end_at timestamptz,
+  p_cleaner_count integer default null
+)
+returns table (
+  provider_id uuid,
+  bio text,
+  service_area text,
+  hourly_rate numeric,
+  daily_rate numeric,
+  rating_average numeric,
+  completed_job_count integer,
+  quote_basis text,
+  quoted_amount numeric
+)
+language plpgsql stable security definer set search_path = '' as $$
+declare
+  v_actor uuid := auth.uid();
+  v_property public.property%rowtype;
+  v_start timestamp;
+  v_end timestamp;
+  v_seconds numeric;
+  v_minutes integer;
+begin
+  if v_actor is null or not exists (
+    select 1 from public.user_account a
+    where a.user_id = v_actor and a.role = 'owner'
+  ) then
+    raise exception 'Property Owner authentication is required'
+      using errcode = '42501';
+  end if;
+  if p_property_id is null or p_service_type_id is null or
+     p_start_at is null or p_end_at is null or
+     p_start_at <= now() or p_end_at <= p_start_at then
+    raise exception 'Select a valid future cleaning interval'
+      using errcode = '23514';
+  end if;
+  v_seconds := extract(epoch from (p_end_at - p_start_at));
+  if mod(v_seconds, 60) <> 0 or v_seconds < 60 or v_seconds > 28800 then
+    raise exception 'Select a service duration up to eight hours'
+      using errcode = '23514';
+  end if;
+  v_minutes := (v_seconds / 60)::integer;
+  select * into v_property from public.property p
+  where p.property_id = p_property_id and p.owner_id = v_actor;
+  if not found then
+    raise exception 'Rental unit is not owned by this account'
+      using errcode = '42501';
+  end if;
+  v_start := p_start_at at time zone 'Asia/Kuala_Lumpur';
+  v_end := p_end_at at time zone 'Asia/Kuala_Lumpur';
+  if v_start::date <> v_end::date or
+     v_start::time < v_property.cleaning_window_start or
+     v_end::time > v_property.cleaning_window_end then
+    return;
+  end if;
+
+  return query
+  select p.provider_id, p.bio, p.service_area, p.hourly_rate,
+         p.daily_rate, p.rating_average, p.completed_job_count,
+         case when p_cleaner_count is not null then 'package' when v_minutes = 480 and p.daily_rate > 0
+           then 'daily' else 'hourly' end,
+         case when p_cleaner_count is not null then k.total_price when v_minutes = 480 and p.daily_rate > 0
+           then p.daily_rate
+           else round(p.hourly_rate * v_minutes / 60, 2) end
+  from public.provider_profile p
+  left join app_private.cleaning_package k on p_cleaner_count is not null and k.provider_id=p.provider_id
+    and k.service_type_id=p_service_type_id and k.duration_minutes=v_minutes and k.cleaner_count=p_cleaner_count and k.enabled
+    and k.service_kind=(select app_private.cleaning_service_kind(s.name) from public.service_type s where s.service_type_id=p_service_type_id)
+  where p.approval_status = 'approved'
+    and ((p_cleaner_count is not null and k.package_id is not null) or (p_cleaner_count is null and (
+      (v_minutes = 480 and (p.daily_rate > 0 or p.hourly_rate > 0)) or
+      (v_minutes < 480 and p.hourly_rate > 0 and
+        round(p.hourly_rate * v_minutes / 60, 2) > 0)
+    )))
+    and exists (
+      select 1 from public.provider_capability c
+      where c.provider_id = p.provider_id and
+            c.service_type_id = p_service_type_id
+    )
+    and not exists (
+      select 1 from public.provider_unavailable_date d
+      where d.provider_id = p.provider_id and
+            d.unavailable_on = v_start::date
+    )
+    and exists (
+      select 1 from public.provider_weekly_slot s
+      where s.provider_id = p.provider_id and
+            s.weekday = extract(isodow from v_start)::integer and
+            s.end_time - s.start_time >= interval '2 hours' and
+            s.start_time <= v_start::time and s.end_time >= v_end::time
+    )
+    and not exists (
+      select 1 from public.booking b
+      where b.provider_id = p.provider_id and
+            b.current_status in ('Accepted', 'In Progress') and
+            b.requested_start_at < p_end_at and
+            p_start_at < b.requested_end_at
+    )
+  order by p.provider_id;
+end;
+$$;
+revoke all on function app_private.find_eligible_providers_core(uuid,uuid,timestamptz,timestamptz,integer)
+ from public,anon,authenticated,service_role;
+create or replace function public.find_eligible_providers(p_property_id uuid,p_service_type_id uuid,p_start_at timestamptz,p_end_at timestamptz)
+returns table(provider_id uuid,bio text,service_area text,hourly_rate numeric,daily_rate numeric,rating_average numeric,
+ completed_job_count integer,quote_basis text,quoted_amount numeric)
+language sql stable security definer set search_path='' as $$
+ select * from app_private.find_eligible_providers_core(p_property_id,p_service_type_id,p_start_at,p_end_at);
+$$;
+revoke all on function public.find_eligible_providers(uuid,uuid,timestamptz,timestamptz) from public,anon,authenticated,service_role;
+grant execute on function public.find_eligible_providers(uuid,uuid,timestamptz,timestamptz) to authenticated;
+
+create function app_private.find_provider_matches_core(p_property_id uuid,p_service_type_id uuid,p_start_at timestamptz,p_end_at timestamptz,p_cleaner_count integer default null)
+returns jsonb language plpgsql stable security definer set search_path='' as $$
+declare prop public.property%rowtype;loc jsonb;current_rows jsonb;alternatives jsonb;duration interval;current_ids uuid[];
+begin
+ -- Run the original validation even when location has not been supplied.
+ select coalesce(array_agg(e.provider_id),'{}'::uuid[]) into current_ids
+ from app_private.find_eligible_providers_core(p_property_id,p_service_type_id,p_start_at,p_end_at,p_cleaner_count)e
+ where app_private.location_gate(p_property_id,e.provider_id) is null;
+ select * into prop from public.property where property_id=p_property_id and owner_id=auth.uid();
+ if not found then raise exception 'Property unavailable' using errcode='42501';end if;
+ loc:=public.my_property_location(p_property_id);
+ if not(loc?'area_id') then return jsonb_build_object('location_required',true,'current','[]'::jsonb,'alternatives','[]'::jsonb);end if;
+ duration:=p_end_at-p_start_at;
+ with candidates as (
+  select to_jsonb(e)||jsonb_build_object('full_name',p.full_name,
+    'distance_km',app_private.provider_distance(p_property_id,p.provider_id),
+    'active_job_count',(select count(*) from public.booking b where b.provider_id=p.provider_id
+     and b.current_status in('Accepted','In Progress') and b.requested_start_at<p_start_at+interval '7 days'
+     and b.requested_end_at>p_start_at)) as item
+  from app_private.find_eligible_providers_core(p_property_id,p_service_type_id,p_start_at,p_end_at,p_cleaner_count)e
+  join public.provider_profile p using(provider_id)
+  where app_private.location_gate(p_property_id,p.provider_id) is null
+  order by p.rating_average desc nulls last,p.provider_id limit 250
+ ), scored as (
+  select item,
+   (case when item->>'distance_km' is null then .5
+    when max((item->>'distance_km')::numeric)over()=min((item->>'distance_km')::numeric)over() then .5
+    else 1-((item->>'distance_km')::numeric-min((item->>'distance_km')::numeric)over())/
+      nullif(max((item->>'distance_km')::numeric)over()-min((item->>'distance_km')::numeric)over(),0) end
+   +case when max(coalesce((item->>'rating_average')::numeric,3))over()=min(coalesce((item->>'rating_average')::numeric,3))over() then .5
+    else (coalesce((item->>'rating_average')::numeric,3)-min(coalesce((item->>'rating_average')::numeric,3))over())/
+      nullif(max(coalesce((item->>'rating_average')::numeric,3))over()-min(coalesce((item->>'rating_average')::numeric,3))over(),0) end
+   +case when max((item->>'active_job_count')::numeric)over()=min((item->>'active_job_count')::numeric)over() then .5
+    else 1-((item->>'active_job_count')::numeric-min((item->>'active_job_count')::numeric)over())/
+      nullif(max((item->>'active_job_count')::numeric)over()-min((item->>'active_job_count')::numeric)over(),0) end)/3 as score
+  from candidates
+ ) select coalesce(jsonb_agg(item order by score desc,item->>'provider_id'),'[]'::jsonb) into current_rows
+ from (select * from scored order by score desc,item->>'provider_id' limit 20)x;
+
+ with providers as (
+  select p.*,k.total_price as package_price from public.provider_profile p
+  left join app_private.cleaning_package k on p_cleaner_count is not null and k.provider_id=p.provider_id
+   and k.service_type_id=p_service_type_id and k.duration_minutes=extract(epoch from duration)/60
+   and k.cleaner_count=p_cleaner_count and k.enabled
+   and k.service_kind=(select app_private.cleaning_service_kind(s.name) from public.service_type s where s.service_type_id=p_service_type_id)
+  where p.approval_status='approved' and app_private.location_gate(p_property_id,p.provider_id) is null
+   and not(p.provider_id=any(current_ids))
+   and exists(select 1 from public.provider_capability c where c.provider_id=p.provider_id and c.service_type_id=p_service_type_id)
+   and ((p_cleaner_count is not null and k.package_id is not null) or (p_cleaner_count is null and
+    ((duration=interval '8 hours' and (p.daily_rate>0 or p.hourly_rate>0)) or (duration<interval '8 hours' and p.hourly_rate>0))))
+  order by p.rating_average desc nulls last,p.provider_id limit 250
+ ), offers as (
+  select p.*,w.start_at,w.start_at+duration as end_at,
+    case when p_cleaner_count is not null then 'package' when duration=interval '8 hours' and p.daily_rate>0 then 'daily' else 'hourly' end as basis,
+    case when p_cleaner_count is not null then p.package_price when duration=interval '8 hours' and p.daily_rate>0 then p.daily_rate
+     else round(p.hourly_rate*(extract(epoch from duration)/3600),2) end as amount
+  from providers p cross join lateral (
+   select t at time zone 'Asia/Kuala_Lumpur' as start_at
+   from public.provider_weekly_slot s cross join generate_series(0,6)d
+   cross join lateral generate_series(
+    greatest(((p_start_at at time zone 'Asia/Kuala_Lumpur')::date+d)+s.start_time,
+             ((p_start_at at time zone 'Asia/Kuala_Lumpur')::date+d)+prop.cleaning_window_start),
+    least(((p_start_at at time zone 'Asia/Kuala_Lumpur')::date+d)+s.end_time,
+          ((p_start_at at time zone 'Asia/Kuala_Lumpur')::date+d)+prop.cleaning_window_end)-duration,
+    interval '30 minutes')t
+   where s.provider_id=p.provider_id and s.end_time-s.start_time>=interval '2 hours'
+    and s.weekday=extract(isodow from t)::integer
+    and t at time zone 'Asia/Kuala_Lumpur'>now()
+    and t at time zone 'Asia/Kuala_Lumpur'<>p_start_at
+    and t::date=(t+duration)::date
+    and not exists(select 1 from public.provider_unavailable_date u where u.provider_id=p.provider_id and u.unavailable_on=t::date)
+    and not exists(select 1 from public.booking b where b.provider_id=p.provider_id
+      and b.current_status in('Accepted','In Progress') and b.requested_start_at<(t at time zone 'Asia/Kuala_Lumpur')+duration
+      and (t at time zone 'Asia/Kuala_Lumpur')<b.requested_end_at)
+   order by abs(extract(epoch from ((t at time zone 'Asia/Kuala_Lumpur')-p_start_at))),t limit 1
+  )w
+ ) select coalesce(jsonb_agg(item order by difference,item->>'provider_id'),'[]'::jsonb) into alternatives from (
+  select jsonb_build_object('provider_id',p.provider_id,'full_name',p.full_name,'bio',p.bio,
+   'service_area',(select name from app_private.service_area where id=loc->>'area_id'),
+   'hourly_rate',p.hourly_rate,'daily_rate',p.daily_rate,'rating_average',p.rating_average,
+   'completed_job_count',p.completed_job_count,'quote_basis',p.basis,'quoted_amount',p.amount,
+   'distance_km',app_private.provider_distance(p_property_id,p.provider_id),
+   'start_at',p.start_at,'end_at',p.end_at) as item,
+   abs(extract(epoch from (p.start_at-p_start_at))) as difference
+  from offers p where p.amount>0 order by difference,p.rating_average desc nulls last,p.provider_id limit 3
+ )x;
+ if p_cleaner_count is not null then
+  select coalesce(jsonb_agg(e.item||jsonb_build_object('package_id',k.package_id,'package_revision',k.revision,
+   'cleaner_count',k.cleaner_count,'duration_minutes',k.duration_minutes,'package_scope',k.package_scope,'total_price',k.total_price)
+   order by e.position),'[]'::jsonb) into current_rows
+  from jsonb_array_elements(current_rows) with ordinality e(item,position)
+  join app_private.cleaning_package k on k.provider_id=(e.item->>'provider_id')::uuid and k.service_type_id=p_service_type_id
+   and k.duration_minutes=extract(epoch from duration)/60 and k.cleaner_count=p_cleaner_count and k.enabled;
+  select coalesce(jsonb_agg(e.item||jsonb_build_object('package_id',k.package_id,'package_revision',k.revision,
+   'cleaner_count',k.cleaner_count,'duration_minutes',k.duration_minutes,'package_scope',k.package_scope,'total_price',k.total_price)
+   order by e.position),'[]'::jsonb) into alternatives
+  from jsonb_array_elements(alternatives) with ordinality e(item,position)
+  join app_private.cleaning_package k on k.provider_id=(e.item->>'provider_id')::uuid and k.service_type_id=p_service_type_id
+   and k.duration_minutes=extract(epoch from duration)/60 and k.cleaner_count=p_cleaner_count and k.enabled;
+ end if;
+ return jsonb_build_object('location_required',false,'area_name',loc->>'area_name','current',current_rows,'alternatives',alternatives);
+end;$$;
+revoke all on function app_private.find_provider_matches_core(uuid,uuid,timestamptz,timestamptz,integer)
+ from public,anon,authenticated,service_role;
+create or replace function public.find_provider_matches(p_property_id uuid,p_service_type_id uuid,p_start_at timestamptz,p_end_at timestamptz)
+returns jsonb language sql stable security definer set search_path='' as $$
+ select app_private.find_provider_matches_core(p_property_id,p_service_type_id,p_start_at,p_end_at);
+$$;
+revoke all on function public.find_provider_matches(uuid,uuid,timestamptz,timestamptz) from public,anon,authenticated,service_role;
+grant execute on function public.find_provider_matches(uuid,uuid,timestamptz,timestamptz) to authenticated;
+
+create function public.find_package_provider_matches(p_property_id uuid,p_service_type_id uuid,p_start_at timestamptz,p_end_at timestamptz,p_cleaner_count integer)
+returns jsonb language plpgsql stable security definer set search_path='' as $$
+begin
+ if p_cleaner_count is null or p_cleaner_count not between 1 and 4 then
+  raise exception 'Choose one to four cleaners' using errcode='22023';end if;
+ return app_private.find_provider_matches_core(p_property_id,p_service_type_id,p_start_at,p_end_at,p_cleaner_count);
+end;$$;
+revoke all on function public.find_package_provider_matches(uuid,uuid,timestamptz,timestamptz,integer)
+ from public,anon,authenticated,service_role;
+grant execute on function public.find_package_provider_matches(uuid,uuid,timestamptz,timestamptz,integer) to authenticated;
