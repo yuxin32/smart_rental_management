@@ -37,9 +37,7 @@ class _TenantProfilePageState extends State<TenantProfilePage> {
           }
 
           if (snapshot.hasError || snapshot.data == null) {
-            return _UnavailableDetails(
-              onRetry: () => setState(_loadDetails),
-            );
+            return _UnavailableDetails(onRetry: () => setState(_loadDetails));
           }
 
           return _TenantDetailsContent(details: snapshot.data!);
@@ -93,7 +91,10 @@ class _TenantDetailsContent extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                       details.email,
-                      style: const TextStyle(color: AppColors.body, fontSize: 13),
+                      style: const TextStyle(
+                        color: AppColors.body,
+                        fontSize: 13,
+                      ),
                     ),
                     const SizedBox(height: 6),
                     TenantStatusPill(
@@ -125,8 +126,15 @@ class _TenantDetailsContent extends StatelessWidget {
           child: Column(
             children: [
               _ProfileLine(
-                label: 'Assigned unit',
-                value: details.unitLabel,
+                label: 'Apartment',
+                value: details.hasTenancy
+                    ? details.apartmentName
+                    : 'Not assigned',
+                icon: Icons.apartment_outlined,
+              ),
+              _ProfileLine(
+                label: 'Unit number',
+                value: details.hasTenancy ? details.unitNumber : 'Not assigned',
                 icon: Icons.meeting_room_outlined,
               ),
               _ProfileLine(
@@ -142,9 +150,20 @@ class _TenantDetailsContent extends StatelessWidget {
                 icon: Icons.date_range_outlined,
               ),
               _ProfileLine(
-                label: 'Occupancy share',
-                value: '${(details.occupancyShare * 100).toStringAsFixed(0)}%',
-                icon: Icons.pie_chart_outline_rounded,
+                label: 'Rental space',
+                value: !details.hasTenancy
+                    ? 'Not assigned'
+                    : details.rentalType == 'room'
+                    ? 'Room ${details.roomNumber}'
+                    : 'Whole unit',
+                icon: Icons.bed_outlined,
+              ),
+              _ProfileLine(
+                label: 'Number of occupants',
+                value: details.hasTenancy
+                    ? '${details.occupantCount}'
+                    : 'Not assigned',
+                icon: Icons.people_outline,
                 last: true,
               ),
             ],
@@ -256,24 +275,41 @@ class _ProfileLine extends StatelessWidget {
             : const Border(bottom: BorderSide(color: Color(0xFFECEFF3))),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: AppColors.primary, size: 21),
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F4FA),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Icon(icon, color: AppColors.primary, size: 20),
+          ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(color: AppColors.body, fontSize: 14),
-            ),
-          ),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              style: const TextStyle(
-                color: AppColors.heading,
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.body,
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    color: AppColors.heading,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    height: 1.45,
+                  ),
+                ),
+              ],
             ),
           ),
         ],
@@ -303,6 +339,6 @@ String _formatDate(DateTime date) {
 String _dateRange(DateTime? start, DateTime? end) {
   if (start == null) return 'Not configured';
   return end == null
-      ? '${_formatDate(start)} – Ongoing'
-      : '${_formatDate(start)} – ${_formatDate(end)}';
+      ? 'From ${_formatDate(start)}\nNo end date'
+      : 'From ${_formatDate(start)}\nUntil ${_formatDate(end)}';
 }

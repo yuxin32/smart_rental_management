@@ -85,8 +85,8 @@ class _ConnectedPropertyFormScreenState
 
   String _originalOrEdited(String value, String? original) =>
       original != null && value.trim() == workspaceText(original)
-          ? original
-          : value.trim();
+      ? original
+      : value.trim();
   String get _buildingToSave {
     final original = widget.initial?.tower;
     if (original != null && _building.text.trim() == workspaceText(original))
@@ -94,7 +94,8 @@ class _ConnectedPropertyFormScreenState
     for (final row in _buildingOptions) {
       final raw = row['building_name'] as String;
       if (normalizedBuildingName(workspaceText(raw)) ==
-          normalizedBuildingName(_building.text)) return raw;
+          normalizedBuildingName(_building.text))
+        return raw;
     }
     return _building.text.trim().replaceAll(RegExp(r'\s+'), ' ');
   }
@@ -159,8 +160,10 @@ class _ConnectedPropertyFormScreenState
 
   Future<void> _save() async {
     if (widget.canSave?.call() == false) {
-      setState(() =>
-          _error = 'Your session changed. Close this form and sign in again.');
+      setState(
+        () =>
+            _error = 'Your session changed. Close this form and sign in again.',
+      );
       return;
     }
     if (_saving || _needsVerification || !_formKey.currentState!.validate())
@@ -187,29 +190,37 @@ class _ConnectedPropertyFormScreenState
       }
       if (!mounted) return;
       if (widget.canSave?.call() == false) {
-        setState(() => _error =
-            'Your session changed. Close this form and sign in again.');
+        setState(
+          () => _error =
+              'Your session changed. Close this form and sign in again.',
+        );
         return;
       }
       writeStarted = true;
-      await widget.onSave(ConnectedPropertyInput(
-        areaId: _areas.firstOrNull,
-        pinLink: _pin.text,
-        unitName: _originalOrEdited(_unit.text, widget.initial?.unit),
-        buildingName: _buildingToSave,
-        address: _originalOrEdited(_address.text, widget.initial?.address),
-        bedrooms: int.parse(_bedrooms.text),
-        sizeSqft: int.parse(_size.text),
-        cleaningWindowStart: _databaseTime(_start!),
-        cleaningWindowEnd: _databaseTime(_end!),
-      ));
+      await widget.onSave(
+        ConnectedPropertyInput(
+          areaId: _areas.firstOrNull,
+          pinLink: _pin.text,
+          unitName: _originalOrEdited(_unit.text, widget.initial?.unit),
+          buildingName: _buildingToSave,
+          address: _originalOrEdited(_address.text, widget.initial?.address),
+          bedrooms: int.parse(_bedrooms.text),
+          sizeSqft: int.parse(_size.text),
+          cleaningWindowStart: _databaseTime(_start!),
+          cleaningWindowEnd: _databaseTime(_end!),
+        ),
+      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          duration: const Duration(seconds: 2),
-          content: Text(widget.initial == null
-              ? 'Rental unit added.'
-              : 'Rental unit changes saved.'),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 2),
+            content: Text(
+              widget.initial == null
+                  ? 'Rental unit added.'
+                  : 'Rental unit changes saved.',
+            ),
+          ),
+        );
         Navigator.of(context).pop(true);
       }
     } catch (error) {
@@ -217,18 +228,19 @@ class _ConnectedPropertyFormScreenState
       SafeDiagnostics.app.record(SafeOperation.propertySave, error);
       if (mounted) {
         setState(() {
-          final rejected = error is PostgrestException &&
+          final rejected =
+              error is PostgrestException &&
               const {'22023', '23514', '23505', '42501'}.contains(error.code);
           _needsVerification = writeStarted && !rejected;
           _error = !writeStarted
               ? 'Could not check saved building names. Check your connection and try again.'
               : error is PostgrestException && error.code == '40001'
-                  ? 'This property was changed elsewhere. Close this form and reload before editing.'
-                  : rejected
-                      ? 'Could not save. Check the details, duplicate unit name and cleaning window. Confirmed bookings must remain within the window.'
-                      : ConnectedFailureMessage.isConnectionFailure(error)
-                          ? 'Connection lost while saving. Your entries are kept. Check My properties before adding this unit again.'
-                          : 'We could not confirm whether this unit was saved. Your entries are kept. Check My properties before adding it again.';
+              ? 'This property was changed elsewhere. Close this form and reload before editing.'
+              : rejected
+              ? 'Could not save. Check the details, duplicate unit name and cleaning window. Confirmed bookings must remain within the window.'
+              : ConnectedFailureMessage.isConnectionFailure(error)
+              ? 'Connection lost while saving. Your entries are kept. Check My properties before adding this unit again.'
+              : 'We could not confirm whether this unit was saved. Your entries are kept. Check My properties before adding it again.';
         });
       }
     } finally {
@@ -250,18 +262,21 @@ class _ConnectedPropertyFormScreenState
         controller: controller,
         enabled: !_saving,
         keyboardType: numeric ? TextInputType.number : TextInputType.text,
-        inputFormatters:
-            numeric ? [FilteringTextInputFormatter.digitsOnly] : null,
-        textCapitalization:
-            numeric ? TextCapitalization.none : TextCapitalization.words,
+        inputFormatters: numeric
+            ? [FilteringTextInputFormatter.digitsOnly]
+            : null,
+        textCapitalization: numeric
+            ? TextCapitalization.none
+            : TextCapitalization.words,
         decoration: InputDecoration(
-            labelText: label,
-            hintText: hint,
-            helperText: helper,
-            helperMaxLines: 3,
-            floatingLabelBehavior: hint == null
-                ? FloatingLabelBehavior.auto
-                : FloatingLabelBehavior.always),
+          labelText: label,
+          hintText: hint,
+          helperText: helper,
+          helperMaxLines: 3,
+          floatingLabelBehavior: hint == null
+              ? FloatingLabelBehavior.auto
+              : FloatingLabelBehavior.always,
+        ),
         validator: (value) {
           if (value == null || value.trim().isEmpty)
             return '$label is required';
@@ -275,185 +290,206 @@ class _ConnectedPropertyFormScreenState
   }
 
   Widget _timeField(bool start) => FormField<TimeOfDay>(
-        autovalidateMode: AutovalidateMode.onUserInteraction,
-        key: ValueKey(start ? 'window-start' : 'window-end'),
-        initialValue: start ? _start : _end,
-        validator: (_) {
-          final value = start ? _start : _end;
-          if (value == null)
-            return start ? 'Select a start time' : 'Select an end time';
-          if (!start && _start != null && _minutes(value) <= _minutes(_start!))
-            return 'End must be after start';
-          return null;
-        },
-        builder: (field) {
-          final value = start ? _start : _end;
-          return Semantics(
-              button: true,
-              child: InkWell(
-                onTap: _saving
-                    ? null
-                    : () async {
-                        final selected = await _pickTime(start: start);
-                        if (selected != null && mounted)
-                          field.didChange(selected);
-                      },
-                child: InputDecorator(
-                  decoration: InputDecoration(
-                    labelText: start
-                        ? 'Cleaning window starts *'
-                        : 'Cleaning window ends *',
-                    errorText: field.errorText,
-                    suffixIcon: const Icon(Icons.schedule),
-                    enabled: !_saving,
-                  ),
-                  child: Text(
-                      value == null ? 'Select time' : _databaseTime(value)),
-                ),
-              ));
-        },
+    autovalidateMode: AutovalidateMode.onUserInteraction,
+    key: ValueKey(start ? 'window-start' : 'window-end'),
+    initialValue: start ? _start : _end,
+    validator: (_) {
+      final value = start ? _start : _end;
+      if (value == null)
+        return start ? 'Select a start time' : 'Select an end time';
+      if (!start && _start != null && _minutes(value) <= _minutes(_start!))
+        return 'End must be after start';
+      return null;
+    },
+    builder: (field) {
+      final value = start ? _start : _end;
+      return Semantics(
+        button: true,
+        child: InkWell(
+          onTap: _saving
+              ? null
+              : () async {
+                  final selected = await _pickTime(start: start);
+                  if (selected != null && mounted) field.didChange(selected);
+                },
+          child: InputDecorator(
+            decoration: InputDecoration(
+              labelText: start
+                  ? 'Cleaning window starts *'
+                  : 'Cleaning window ends *',
+              errorText: field.errorText,
+              suffixIcon: const Icon(Icons.schedule),
+              enabled: !_saving,
+            ),
+            child: Text(value == null ? 'Select time' : _databaseTime(value)),
+          ),
+        ),
       );
+    },
+  );
 
   @override
   Widget build(BuildContext context) {
     return UnsavedChangesGuard(
-        dirty: () =>
-            _areas.firstOrNull != widget.initial?.locationAreaId ||
-            _pin.text.trim() != (widget.initial?.locationPinLink ?? '') ||
-            _unit.text != workspaceText(widget.initial?.unit ?? '') ||
-            _building.text != workspaceText(widget.initial?.tower ?? '') ||
-            _address.text != workspaceText(widget.initial?.address ?? '') ||
-            _bedrooms.text !=
-                (widget.initial == null ? '' : '${widget.initial!.bedrooms}') ||
-            _size.text !=
-                (widget.initial == null ? '' : '${widget.initial!.sizeSqft}') ||
-            _start != widget.initial?.cleaningWindowStart ||
-            _end != widget.initial?.cleaningWindowEnd,
-        busy: () => _saving,
-        child: Scaffold(
-          appBar: AppBar(
-              title: Text(widget.initial == null
-                  ? 'Add rental unit'
-                  : 'Edit rental unit')),
-          body: Form(
-            key: _formKey,
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  const Text('Property details',
-                      style:
-                          TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 8),
-                  const Text('This rental unit will be saved to your account.'),
-                  const SizedBox(height: 20),
-                  _textField('Apartment unit (e.g. A-12-05)', _unit,
-                      hint: 'e.g. A-12-03',
-                      helper: 'The unit or apartment number.'),
-                  BuildingNameField(
-                      controller: _building,
-                      address: _address,
-                      enabled: !_saving,
-                      loadOptions: widget.loadBuildingOptions == null
-                          ? null
-                          : _loadBuildingOptions),
-                  _textField('Property address', _address,
-                      hint: 'e.g. 12 Jalan Example, Kuala Lumpur',
-                      helper:
-                          'The address the provider needs to find this property.'),
-                  BedroomCountField(controller: _bedrooms, enabled: !_saving),
-                  if (widget.loadServiceAreas != null) ...[
-                    const SizedBox(height: 16),
-                    ServiceLocationFields(
-                        loadAreas: widget.loadServiceAreas!,
-                        selected: _areas,
-                        onChanged: (v) => setState(() => _areas = v),
-                        pinController: _pin,
-                        enabled: !_saving),
-                  ],
-                  const SizedBox(height: 14),
-                  _textField('Size (sqft)', _size,
-                      numeric: true,
-                      hint: 'e.g. 980',
-                      helper: 'Floor area in square feet (sqft).'),
-                  const SizedBox(height: 8),
-                  const Text('Permissible cleaning window',
-                      style:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-                  const SizedBox(height: 6),
-                  const Text(
-                      'Cleaning bookings must fit within this time range.'),
-                  const Text(
-                      'Both times are required · 24-hour format (HH:mm) · Malaysia time'),
-                  const SizedBox(height: 12),
-                  _timeField(true),
+      dirty: () =>
+          _areas.firstOrNull != widget.initial?.locationAreaId ||
+          _pin.text.trim() != (widget.initial?.locationPinLink ?? '') ||
+          _unit.text != workspaceText(widget.initial?.unit ?? '') ||
+          _building.text != workspaceText(widget.initial?.tower ?? '') ||
+          _address.text != workspaceText(widget.initial?.address ?? '') ||
+          _bedrooms.text !=
+              (widget.initial == null ? '' : '${widget.initial!.bedrooms}') ||
+          _size.text !=
+              (widget.initial == null ? '' : '${widget.initial!.sizeSqft}') ||
+          _start != widget.initial?.cleaningWindowStart ||
+          _end != widget.initial?.cleaningWindowEnd,
+      busy: () => _saving,
+      child: Scaffold(
+        appBar: AppBar(
+          title: Text(
+            widget.initial == null ? 'Add rental unit' : 'Edit rental unit',
+          ),
+        ),
+        body: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  'Property details',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                const Text('This rental unit will be saved to your account.'),
+                const SizedBox(height: 20),
+                _textField(
+                  'Unit / apartment number',
+                  _unit,
+                  hint: 'e.g. A-101 or 12-05',
+                  helper: 'The unit or apartment number.',
+                ),
+                BuildingNameField(
+                  controller: _building,
+                  address: _address,
+                  enabled: !_saving,
+                  loadOptions: widget.loadBuildingOptions == null
+                      ? null
+                      : _loadBuildingOptions,
+                ),
+                _textField(
+                  'Property address',
+                  _address,
+                  hint: 'e.g. 12 Jalan Example, Kuala Lumpur',
+                  helper:
+                      'The address the provider needs to find this property.',
+                ),
+                BedroomCountField(controller: _bedrooms, enabled: !_saving),
+                if (widget.loadServiceAreas != null) ...[
                   const SizedBox(height: 16),
-                  _timeField(false),
-                  if (_error != null) ...[
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.errorContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.info_outline,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onErrorContainer),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Text(_error!,
-                                style: TextStyle(
-                                    color: Theme.of(context)
-                                        .colorScheme
-                                        .onErrorContainer)),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 80),
+                  ServiceLocationFields(
+                    loadAreas: widget.loadServiceAreas!,
+                    selected: _areas,
+                    onChanged: (v) => setState(() => _areas = v),
+                    pinController: _pin,
+                    enabled: !_saving,
+                  ),
                 ],
-              ),
+                const SizedBox(height: 14),
+                _textField(
+                  'Size (sqft)',
+                  _size,
+                  numeric: true,
+                  hint: 'e.g. 980',
+                  helper: 'Floor area in square feet (sqft).',
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Permissible cleaning window',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Cleaning bookings must fit within this time range.',
+                ),
+                const Text(
+                  'Both times are required · 24-hour format (HH:mm) · Malaysia time',
+                ),
+                const SizedBox(height: 12),
+                _timeField(true),
+                const SizedBox(height: 16),
+                _timeField(false),
+                if (_error != null) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(
+                          Icons.info_outline,
+                          color: Theme.of(context).colorScheme.onErrorContainer,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _error!,
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onErrorContainer,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 80),
+              ],
             ),
           ),
-          bottomNavigationBar: Padding(
-            padding: EdgeInsets.only(
-                bottom: MediaQuery.viewInsetsOf(context).bottom),
-            child: SafeArea(
-              top: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
-                child: _needsVerification
-                    ? FilledButton.icon(
-                        onPressed: () => Navigator.of(context).pop(false),
-                        icon: const Icon(Icons.home_outlined),
-                        label: const Text('Check My properties'),
-                      )
-                    : FilledButton.icon(
-                        onPressed: _saving ? null : _save,
-                        icon: _saving
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
-                              )
-                            : const Icon(Icons.save_outlined),
-                        label: Text(_saving
+        ),
+        bottomNavigationBar: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(context).bottom,
+          ),
+          child: SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
+              child: _needsVerification
+                  ? FilledButton.icon(
+                      onPressed: () => Navigator.of(context).pop(false),
+                      icon: const Icon(Icons.home_outlined),
+                      label: const Text('Check My properties'),
+                    )
+                  : FilledButton.icon(
+                      onPressed: _saving ? null : _save,
+                      icon: _saving
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.save_outlined),
+                      label: Text(
+                        _saving
                             ? 'Saving…'
                             : widget.initial == null
-                                ? 'Add property'
-                                : 'Save changes'),
+                            ? 'Add property'
+                            : 'Save changes',
                       ),
-              ),
+                    ),
             ),
           ),
-        ));
+        ),
+      ),
+    );
   }
 }

@@ -25,6 +25,9 @@ class TenantRegistrationRecord {
     required this.documentsSubmittedAt,
     required this.verificationNotes,
     required this.verificationReviewedAt,
+    this.rentalType = 'whole_unit',
+    this.roomNumber,
+    this.occupantCount = 1,
   });
 
   final String registrationId;
@@ -48,6 +51,9 @@ class TenantRegistrationRecord {
   final DateTime? documentsSubmittedAt;
   final String? verificationNotes;
   final DateTime? verificationReviewedAt;
+  final String rentalType;
+  final int? roomNumber;
+  final int occupantCount;
 
   bool get hasAssignment =>
       unitId != null && startDate != null && monthlyRentalAmount != null;
@@ -156,6 +162,9 @@ class TenantRegistrationRecord {
       documentsSubmittedAt: _dateFrom(map['documents_submitted_at']),
       verificationNotes: map['verification_notes'] as String?,
       verificationReviewedAt: _dateFrom(map['verification_reviewed_at']),
+      rentalType: map['rental_type'] as String? ?? 'whole_unit',
+      roomNumber: (map['room_number'] as num?)?.toInt(),
+      occupantCount: (map['occupant_count'] as num?)?.toInt() ?? 1,
     );
   }
 
@@ -185,16 +194,6 @@ class RentalUnitOption {
   final String status;
   final int capacity;
 
-  String get blockCode {
-    final parts = unitNumber.split('-');
-    return parts.length == 3 ? parts[0] : '';
-  }
-
-  int? get floorNumber {
-    final parts = unitNumber.split('-');
-    return parts.length == 3 ? int.tryParse(parts[1]) : null;
-  }
-
   String get label {
     if (location == null || location!.isEmpty) return unitNumber;
     return '$location · $unitNumber';
@@ -208,6 +207,44 @@ class RentalUnitOption {
       status: map['unit_status'] as String? ?? 'available',
       capacity: (map['occupancy_capacity'] as num?)?.toInt() ?? 1,
     );
+  }
+}
+
+class RegisteredTenancyUnit {
+  RegisteredTenancyUnit(Map<String, dynamic> row)
+    : unitId = row['unit_id'] as String,
+      unitNumber = row['unit_number'] as String,
+      buildingName = row['building_name'] as String,
+      bedrooms = (row['bedrooms'] as num).toInt(),
+      total = (row['occupancy']['total'] as num).toInt(),
+      wholeUnitReserved = (row['occupancy']['whole'] as num).toInt() > 0,
+      roomOccupants = List<int>.generate(
+        (row['bedrooms'] as num).toInt(),
+        (i) => i < (row['occupancy']['rooms'] as List).length
+            ? (row['occupancy']['rooms'][i] as num).toInt()
+            : 0,
+      );
+
+  final String unitId, unitNumber, buildingName;
+  final int bedrooms, total;
+  final bool wholeUnitReserved;
+  final List<int> roomOccupants;
+
+  bool get isFullyOccupied =>
+      wholeUnitReserved ||
+      total >= 8 ||
+      (bedrooms > 0 &&
+          List.generate(
+            bedrooms,
+            (i) => remaining(false, i + 1),
+          ).every((space) => space == 0));
+
+  int remaining(bool wholeUnit, int? room) {
+    if (wholeUnitReserved || (wholeUnit && total > 0)) return 0;
+    if (wholeUnit) return 8;
+    if (room == null || room < 1 || room > bedrooms) return 0;
+    final space = 2 - roomOccupants[room - 1];
+    return space.clamp(0, (8 - total).clamp(0, 8)).toInt();
   }
 }
 
@@ -276,6 +313,26 @@ class AuditLogRecord {
 
 abstract final class TenantLifecycleService {
   static SupabaseClient get _client => Supabase.instance.client;
+
+  static Future<List<RegisteredTenancyUnit>> fetchTenancyUnits({
+    required String registrationId,
+    required DateTime start,
+    DateTime? end,
+  }) async {
+    final rows = await _client.rpc(
+      'list_tenancy_unit_options',
+      params: {
+        'p_registration_id': registrationId,
+        'p_start': _dateValue(start),
+        'p_end': end == null ? null : _dateValue(end),
+      },
+    );
+    return (rows as List)
+        .map(
+          (row) => RegisteredTenancyUnit(Map<String, dynamic>.from(row as Map)),
+        )
+        .toList();
+  }
 
   static Future<List<TenantRegistrationRecord>> fetchRegistrations() async {
     final rows = await _client
@@ -379,19 +436,24 @@ abstract final class TenantLifecycleService {
     required DateTime startDate,
     DateTime? endDate,
     required double monthlyRentalAmount,
-    required double occupancyShare,
+    required String rentalType,
+    int? roomNumber,
+    required int occupantCount,
   }) async {
-    await _client.rpc(
-      'assign_verified_tenant',
+    final saved = await _client.rpc(
+      'assign_registered_tenant',
       params: {
         'p_registration_id': registrationId,
         'p_unit_id': unitId,
         'p_start_date': _dateValue(startDate),
         'p_end_date': endDate == null ? null : _dateValue(endDate),
         'p_monthly_rental_amount': monthlyRentalAmount,
-        'p_occupancy_share': occupancyShare,
+        'p_rental_type': rentalType,
+        'p_room_number': roomNumber,
+        'p_occupant_count': occupantCount,
       },
     );
+    if (saved != true) throw StateError('Rental assignment was not saved.');
   }
 
   static Future<void> reviewVerification({
@@ -487,7 +549,7 @@ abstract final class TenantLifecycleService {
     final tenancy = await _client
         .from('tenancy')
         .select(
-          'start_date, end_date, monthly_rental_amount, occupancy_share, tenancy_status, rental_unit(unit_number, block_and_floor)',
+          'start_date, end_date, monthly_rental_amount, occupancy_share, tenancy_status, rental_type, room_number, occupant_count, rental_unit(unit_number, block_and_floor)',
         )
         .eq('tenant_id', userId)
         .inFilter('tenancy_status', ['pending', 'active'])
@@ -532,6 +594,9 @@ abstract final class TenantLifecycleService {
           0,
       occupancyShare:
           TenantRegistrationRecord._doubleFrom(tenancy['occupancy_share']) ?? 1,
+      rentalType: tenancy['rental_type'] as String? ?? 'whole_unit',
+      roomNumber: (tenancy['room_number'] as num?)?.toInt(),
+      occupantCount: (tenancy['occupant_count'] as num?)?.toInt() ?? 1,
     );
   }
 
@@ -555,6 +620,9 @@ class TenantRentalDetails {
     required this.endDate,
     required this.monthlyRentalAmount,
     required this.occupancyShare,
+    this.rentalType = 'whole_unit',
+    this.roomNumber,
+    this.occupantCount = 1,
   });
 
   final String fullName;
@@ -567,8 +635,13 @@ class TenantRentalDetails {
   final DateTime? endDate;
   final double monthlyRentalAmount;
   final double occupancyShare;
+  final String rentalType;
+  final int? roomNumber;
+  final int occupantCount;
 
   bool get hasTenancy => tenancyStatus != 'unassigned';
+  String get apartmentName => unitLocation?.trim().isNotEmpty == true
+      ? unitLocation!.trim() : 'Apartment details pending';
 
   String get unitLabel {
     if (unitLocation == null || unitLocation!.isEmpty) return unitNumber;

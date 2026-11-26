@@ -46,7 +46,7 @@ class TenantCommunicationPage extends StatelessWidget {
           const SizedBox(height: 4),
           Expanded(
             child: TabBarView(
-              children: [_AnnouncementsList(), const _ChatList()],
+              children: [const TenantAnnouncementsList(), const _ChatList()],
             ),
           ),
         ],
@@ -55,12 +55,19 @@ class TenantCommunicationPage extends StatelessWidget {
   }
 }
 
-class _AnnouncementsList extends StatefulWidget {
+class TenantAnnouncementsList extends StatefulWidget {
+  const TenantAnnouncementsList({
+    this.loadAnnouncements,
+    this.markRead,
+    super.key,
+  });
+  final Future<List<AnnouncementRecord>> Function()? loadAnnouncements;
+  final Future<DateTime> Function(String id)? markRead;
   @override
-  State<_AnnouncementsList> createState() => _AnnouncementsListState();
+  State<TenantAnnouncementsList> createState() => _AnnouncementsListState();
 }
 
-class _AnnouncementsListState extends State<_AnnouncementsList> {
+class _AnnouncementsListState extends State<TenantAnnouncementsList> {
   List<AnnouncementRecord> _announcements = const [];
   bool _loading = true;
   String? _error;
@@ -78,7 +85,8 @@ class _AnnouncementsListState extends State<_AnnouncementsList> {
     });
     try {
       final announcements =
-          await AnnouncementService.fetchPublishedAnnouncements();
+          await (widget.loadAnnouncements?.call() ??
+              AnnouncementService.fetchPublishedAnnouncements());
       if (mounted) setState(() => _announcements = announcements);
     } catch (_) {
       if (mounted) {
@@ -180,16 +188,20 @@ class _AnnouncementsListState extends State<_AnnouncementsList> {
         separatorBuilder: (_, _) => const SizedBox(height: 12),
         itemBuilder: (context, index) {
           final announcement = _announcements[index];
+          final read = announcement.isRead;
           return TenantCard(
+            color: read ? const Color(0xFFF1F3F6) : Colors.white,
             onTap: () => _showAnnouncement(context, announcement),
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 15),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const TenantIconBox(
+                TenantIconBox(
                   icon: Icons.campaign_outlined,
-                  color: AppColors.primary,
-                  backgroundColor: Color(0xFFF0F5FF),
+                  color: read ? const Color(0xFF9299A5) : AppColors.primary,
+                  backgroundColor: read
+                      ? const Color(0xFFE5E8ED)
+                      : const Color(0xFFF0F5FF),
                 ),
                 const SizedBox(width: 14),
                 Expanded(
@@ -202,10 +214,14 @@ class _AnnouncementsListState extends State<_AnnouncementsList> {
                           Expanded(
                             child: Text(
                               announcement.title,
-                              style: const TextStyle(
-                                color: AppColors.heading,
+                              style: TextStyle(
+                                color: read
+                                    ? const Color(0xFF737C8B)
+                                    : AppColors.heading,
                                 fontSize: 16,
-                                fontWeight: FontWeight.w800,
+                                fontWeight: read
+                                    ? FontWeight.w600
+                                    : FontWeight.w800,
                               ),
                             ),
                           ),
@@ -234,20 +250,26 @@ class _AnnouncementsListState extends State<_AnnouncementsList> {
                         ),
                       ),
                       const SizedBox(height: 9),
-                      const Row(
+                      Row(
                         children: [
-                          Text(
-                            'View details',
-                            style: TextStyle(
-                              color: AppColors.primary,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
+                          Expanded(
+                            child: Text(
+                              read ? 'Read · View details' : 'View details',
+                              style: TextStyle(
+                                color: read
+                                    ? const Color(0xFF737C8B)
+                                    : AppColors.primary,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
-                          SizedBox(width: 5),
+                          const SizedBox(width: 5),
                           Icon(
                             Icons.chevron_right_rounded,
-                            color: AppColors.primary,
+                            color: read
+                                ? const Color(0xFF737C8B)
+                                : AppColors.primary,
                             size: 20,
                           ),
                         ],
@@ -268,46 +290,89 @@ class _AnnouncementsListState extends State<_AnnouncementsList> {
     return '${local.day}/${local.month}/${local.year}';
   }
 
-  static void _showAnnouncement(
+  Future<void> _showAnnouncement(
     BuildContext context,
     AnnouncementRecord announcement,
-  ) {
-    showModalBottomSheet<void>(
+  ) async {
+    final sheet = showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
+      isScrollControlled: true,
       backgroundColor: Colors.white,
-      builder: (context) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 5, 24, 30),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              announcement.title,
-              style: const TextStyle(
-                color: AppColors.heading,
-                fontSize: 21,
-                fontWeight: FontWeight.w800,
+      constraints: const BoxConstraints(maxWidth: 640),
+      builder: (sheetContext) => SafeArea(
+        top: false,
+        child: SizedBox(
+          width: double.infinity,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.8,
+            ),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 5, 24, 30),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    announcement.title,
+                    style: const TextStyle(
+                      color: AppColors.heading,
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${announcement.audienceLabel} · ${_formatDate(announcement.publishedAt ?? announcement.createdAt)}',
+                    style: const TextStyle(
+                      color: Color(0xFF737C8B),
+                      fontSize: 13,
+                    ),
+                  ),
+                  const Divider(height: 28),
+                  SelectableText(
+                    announcement.content,
+                    style: const TextStyle(
+                      color: AppColors.body,
+                      fontSize: 15,
+                      height: 1.6,
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-            Text(
-              '${announcement.audienceLabel} · ${_formatDate(announcement.publishedAt ?? announcement.createdAt)}',
-              style: const TextStyle(color: Color(0xFF98A0AF), fontSize: 13),
-            ),
-            const SizedBox(height: 15),
-            Text(
-              announcement.content,
-              style: const TextStyle(
-                color: AppColors.body,
-                fontSize: 15,
-                height: 1.5,
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
+    if (!announcement.isRead) {
+      try {
+        final readAt =
+            await (widget.markRead?.call(announcement.announcementId) ??
+                AnnouncementService.markRead(announcement.announcementId));
+        if (mounted)
+          setState(() {
+            _announcements = _announcements
+                .map(
+                  (item) => item.announcementId == announcement.announcementId
+                      ? item.withReadAt(readAt)
+                      : item,
+                )
+                .toList();
+          });
+      } catch (_) {
+        if (context.mounted)
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'The announcement opened, but its read status could not be saved. Please open it again when connected.',
+              ),
+            ),
+          );
+      }
+    }
+    await sheet;
   }
 }
 

@@ -96,7 +96,7 @@ void main() {
     await tester.pumpWidget(MaterialApp(
         home: ConnectedPropertyFormScreen(
             initial: initial, onSave: (value) async => saved = value)));
-    final unit = find.widgetWithText(TextFormField, 'Apartment unit (e.g. A-12-05)');
+    final unit = find.widgetWithText(TextFormField, 'Unit / apartment number');
     expect(tester.widget<TextFormField>(unit).controller!.text, 'A-101');
     expect(find.textContaining('[UAT]'), findsNothing);
     await tester.tap(find.text('Save changes'));
@@ -125,7 +125,7 @@ void main() {
             onSave: (value) async => saved = value)));
     await tester.pumpAndSettle();
     await tester.enterText(
-        find.widgetWithText(TextFormField, 'Apartment unit (e.g. A-12-05)'), 'A-202');
+        find.widgetWithText(TextFormField, 'Unit / apartment number'), 'A-202');
     await tester.enterText(
         find.widgetWithText(TextFormField, 'Building or tower'),
         'Maple Residence');

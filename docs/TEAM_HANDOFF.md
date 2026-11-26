@@ -4,14 +4,14 @@
 
 Repository: <https://github.com/yuxin32/smart_rental_management>
 
-Use **`integration-owner-provider-latest`**. The default `main` branch does not
-contain the latest Owner / Provider integration. This handoff does not merge or
-replace `main`.
+Use **`integration`** for continued development. The validated combined source
+is also merged into **`main`**. The older `integration-owner-provider-latest`
+branch is retained as the previous integration checkpoint.
 
 First checkout in PowerShell, from the parent directory where you keep projects:
 
 ```powershell
-git clone --branch integration-owner-provider-latest --single-branch https://github.com/yuxin32/smart_rental_management.git smart_rental_integration
+git clone --branch integration --single-branch https://github.com/yuxin32/smart_rental_management.git smart_rental_integration
 cd smart_rental_integration
 git branch --show-current
 git log -1 --oneline
@@ -34,16 +34,16 @@ changes on your feature branch before switching; do not discard local work.
 Then fetch the integration branch and fast-forward it:
 
 ```powershell
-git fetch origin integration-owner-provider-latest:refs/remotes/origin/integration-owner-provider-latest
-git switch integration-owner-provider-latest
-git pull --ff-only origin integration-owner-provider-latest
+git fetch origin integration:refs/remotes/origin/integration
+git switch integration
+git pull --ff-only origin integration
 flutter pub get
 ```
 
 If that local branch does not exist yet, use this instead of `git switch` above:
 
 ```powershell
-git switch --track origin/integration-owner-provider-latest
+git switch --track origin/integration
 ```
 
 Compare `git log -1 --oneline` with the handoff commit shared in chat. Start new
@@ -54,8 +54,7 @@ git switch -c feature/your-change
 ```
 
 Push that feature branch and open a pull request into
-`integration-owner-provider-latest` for review. Agree on merging integration into
-`main` separately.
+`integration` for review, then merge tested changes into `main`.
 
 ## Included in this update
 

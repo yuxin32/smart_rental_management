@@ -2,9 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../../core/auth/app_logout_button.dart';
+import '../../../../core/config/integrated_backend.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../admin/data/tenant_lifecycle_service.dart';
-import 'tenant_verification_page.dart';
+import 'tenant_login_page.dart';
 
 class TenantSetPasswordPage extends StatefulWidget {
   const TenantSetPasswordPage({super.key});
@@ -19,6 +20,7 @@ class _TenantSetPasswordPageState extends State<TenantSetPasswordPage> {
   bool _obscurePassword = true;
   bool _obscureConfirmation = true;
   bool _isSaving = false;
+  bool _passwordUpdated = false;
 
   @override
   void dispose() {
@@ -28,6 +30,7 @@ class _TenantSetPasswordPageState extends State<TenantSetPasswordPage> {
   }
 
   Future<void> _savePassword() async {
+    if (_isSaving) return;
     final password = _passwordController.text;
     final confirmation = _confirmPasswordController.text;
 
@@ -41,22 +44,33 @@ class _TenantSetPasswordPageState extends State<TenantSetPasswordPage> {
     }
 
     setState(() => _isSaving = true);
+    final navigator = Navigator.of(context);
     try {
-      await Supabase.instance.client.auth.updateUser(
-        UserAttributes(password: password),
-      );
+      if (!_passwordUpdated) {
+        await Supabase.instance.client.auth.updateUser(
+          UserAttributes(password: password),
+        );
+        _passwordUpdated = true;
+      }
       await TenantLifecycleService.activateCurrentTenant();
-      if (!mounted) return;
+      await IntegratedBackend.instance.auth.signOut();
+      // Signing out can rebuild the auth gate and dispose this form. The
+      // root navigator still owns the route to the tenant sign-in screen.
+      if (!navigator.mounted) return;
 
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const TenantVerificationPage()),
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const TenantLoginPage()),
         (route) => false,
       );
     } on AuthException catch (error) {
       if (mounted) _showMessage(error.message);
     } catch (_) {
       if (mounted) {
-        _showMessage('Unable to complete account setup. Please try again.');
+        _showMessage(
+          _passwordUpdated
+              ? 'Your password was saved. Account setup or sign-out could not finish. Please retry.'
+              : 'Unable to complete account setup. Please try again.',
+        );
       }
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -120,7 +134,7 @@ class _TenantSetPasswordPageState extends State<TenantSetPasswordPage> {
                 ),
                 const SizedBox(height: 8),
                 const Text(
-                  'You signed in with the temporary password provided by the apartment administrator. Replace it now to complete your account setup.',
+                  'Replace the temporary password provided by the apartment administrator. After saving, sign in again with your new password.',
                   style: TextStyle(
                     color: Color.fromRGBO(255, 255, 255, 0.84),
                     fontSize: 15,
@@ -137,6 +151,7 @@ class _TenantSetPasswordPageState extends State<TenantSetPasswordPage> {
                   child: Column(
                     children: [
                       TextFormField(
+                        enabled: !_isSaving && !_passwordUpdated,
                         controller: _passwordController,
                         obscureText: _obscurePassword,
                         decoration: _inputDecoration(
@@ -156,6 +171,7 @@ class _TenantSetPasswordPageState extends State<TenantSetPasswordPage> {
                       ),
                       const SizedBox(height: 16),
                       TextFormField(
+                        enabled: !_isSaving && !_passwordUpdated,
                         controller: _confirmPasswordController,
                         obscureText: _obscureConfirmation,
                         decoration: _inputDecoration(
@@ -197,9 +213,11 @@ class _TenantSetPasswordPageState extends State<TenantSetPasswordPage> {
                                     color: Colors.white,
                                   ),
                                 )
-                              : const Text(
-                                  'Save password and continue',
-                                  style: TextStyle(
+                              : Text(
+                                  _passwordUpdated
+                                      ? 'Finish setup and return to login'
+                                      : 'Save password and return to login',
+                                  style: const TextStyle(
                                     fontSize: 16,
                                     fontWeight: FontWeight.w800,
                                   ),

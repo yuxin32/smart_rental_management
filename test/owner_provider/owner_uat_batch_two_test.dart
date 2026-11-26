@@ -172,7 +172,7 @@ void main() {
     await tester.pumpWidget(
         app(ConnectedPropertyFormScreen(onSave: (_) async => writes++)));
     for (final hint in [
-      'e.g. A-12-03',
+      'e.g. A-101 or 12-05',
       'e.g. Menara Suria, Tower A',
       'e.g. 12 Jalan Example, Kuala Lumpur',
       'e.g. 980'
@@ -184,7 +184,7 @@ void main() {
     await tester.tap(find.text('Add property'));
     await tester.pumpAndSettle();
     expect(writes, 0);
-    expect(find.text('Apartment unit (e.g. A-12-05) is required'), findsOneWidget);
+    expect(find.text('Unit / apartment number is required'), findsOneWidget);
     expect(find.text('Select the number of bedrooms'), findsOneWidget);
   });
 

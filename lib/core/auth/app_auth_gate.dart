@@ -29,7 +29,10 @@ class _AppAuthGateState extends State<AppAuthGate> {
     _profile = _resolveProfile();
     try {
       _authSubscription = Supabase.instance.client.auth.onAuthStateChange
-          .listen((_) {
+          .listen((state) {
+            // Password setup owns its update/activation/sign-out sequence.
+            // Replacing the form on userUpdated interrupts that sequence.
+            if (state.event == AuthChangeEvent.userUpdated) return;
             if (!mounted) return;
             setState(() {
               _profile = _resolveProfile();
@@ -51,7 +54,11 @@ class _AppAuthGateState extends State<AppAuthGate> {
     try {
       var profile = await AppAuthService.loadCurrentProfile();
       final user = IntegratedBackend.instance.client.auth.currentUser;
-      if (profile == null && ['owner', 'provider'].contains(user?.userMetadata?['requested_role'])) {
+      if (profile == null &&
+          [
+            'owner',
+            'provider',
+          ].contains(user?.userMetadata?['requested_role'])) {
         await IntegratedBackend.instance.auth.currentIdentity();
         profile = await AppAuthService.loadCurrentProfile();
       }

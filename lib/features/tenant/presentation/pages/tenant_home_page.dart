@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import '../../../../core/auth/app_logout_button.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../admin/data/tenant_lifecycle_service.dart';
@@ -9,17 +8,15 @@ import 'tenant_payment_page.dart';
 import 'tenant_profile_page.dart';
 
 class TenantHomePage extends StatefulWidget {
-  const TenantHomePage({this.onNavigateToTab, super.key});
-
+  const TenantHomePage({this.onNavigateToTab, this.loadDetails, super.key});
   final ValueChanged<int>? onNavigateToTab;
-
+  final Future<TenantRentalDetails?> Function()? loadDetails;
   @override
   State<TenantHomePage> createState() => TenantHomePageState();
 }
 
 class TenantHomePageState extends State<TenantHomePage> {
   late Future<TenantRentalDetails?> _detailsFuture;
-
   @override
   void initState() {
     super.initState();
@@ -27,7 +24,9 @@ class TenantHomePageState extends State<TenantHomePage> {
   }
 
   void _loadDetails() {
-    _detailsFuture = TenantLifecycleService.fetchCurrentTenantDetails();
+    _detailsFuture =
+        widget.loadDetails?.call() ??
+        TenantLifecycleService.fetchCurrentTenantDetails();
   }
 
   Future<void> refresh() async {
@@ -36,55 +35,31 @@ class TenantHomePageState extends State<TenantHomePage> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<TenantRentalDetails?>(
-      future: _detailsFuture,
-      builder: (context, snapshot) {
-        return CustomScrollView(
-          slivers: [
-            SliverToBoxAdapter(
-              child: _TenantHeader(
-                details: snapshot.data,
-                loading: snapshot.connectionState != ConnectionState.done,
-                hasError: snapshot.hasError,
-                onRetry: refresh,
-                onNotificationTap: () {
-                  if (widget.onNavigateToTab != null) {
-                    widget.onNavigateToTab!(4);
-                  } else {
-                    _showMessage(
-                      context,
-                      'Notifications will be connected soon.',
-                    );
-                  }
-                },
+  Widget build(BuildContext context) => FutureBuilder<TenantRentalDetails?>(
+    future: _detailsFuture,
+    builder: (context, snapshot) => CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: _TenantHeader(
+            details: snapshot.data,
+            loading: snapshot.connectionState != ConnectionState.done,
+            hasError: snapshot.hasError,
+            onRetry: refresh,
+          ),
+        ),
+        SliverPadding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          sliver: SliverToBoxAdapter(
+            child: _OutstandingBillCard(
+              onPayNow: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TenantPaymentPage()),
               ),
             ),
-            SliverPadding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
-              sliver: SliverToBoxAdapter(
-                child: _OutstandingBillCard(
-                  onPayNow: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (_) => const TenantPaymentPage(),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  static void _showMessage(BuildContext context, String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _TenantHeader extends StatelessWidget {
@@ -93,242 +68,132 @@ class _TenantHeader extends StatelessWidget {
     required this.loading,
     required this.hasError,
     required this.onRetry,
-    required this.onNotificationTap,
   });
-
   final TenantRentalDetails? details;
-  final bool loading;
-  final bool hasError;
+  final bool loading, hasError;
   final VoidCallback onRetry;
-  final VoidCallback onNotificationTap;
-
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(22, 14, 22, 24),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [AppColors.headerStart, AppColors.headerEnd],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.vertical(bottom: Radius.circular(34)),
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.fromLTRB(22, 14, 22, 24),
+    decoration: const BoxDecoration(
+      gradient: LinearGradient(
+        colors: [AppColors.headerStart, AppColors.headerEnd],
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Good morning,',
-                      style: TextStyle(
-                        color: Color.fromRGBO(255, 255, 255, 0.82),
-                        fontSize: 16,
-                      ),
-                    ),
-                    SizedBox(height: 3),
-                    Text(
-                      loading
-                          ? 'Loading your details…'
-                          : hasError
-                          ? 'Tenant'
-                          : (details?.fullName.trim().isNotEmpty ?? false)
-                          ? details!.fullName.trim()
-                          : 'Tenant',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 12),
-              const AppLogoutButton(
-                foregroundColor: Colors.white,
-                backgroundColor: Color.fromRGBO(255, 255, 255, 0.18),
-              ),
-              const SizedBox(width: 8),
-              Semantics(
-                button: true,
-                label: 'View notifications',
-                child: InkWell(
-                  onTap: onNotificationTap,
-                  borderRadius: BorderRadius.circular(18),
-                  child: Stack(
-                    clipBehavior: Clip.none,
-                    children: [
-                      Container(
-                        width: 46,
-                        height: 46,
-                        decoration: BoxDecoration(
-                          color: const Color.fromRGBO(255, 255, 255, 0.18),
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: const Icon(
-                          Icons.notifications_none_rounded,
-                          color: Colors.white,
-                          size: 25,
-                        ),
-                      ),
-                      Positioned(
-                        top: -1,
-                        right: -1,
-                        child: Container(
-                          width: 11,
-                          height: 11,
-                          decoration: BoxDecoration(
-                            color: AppColors.warning,
-                            shape: BoxShape.circle,
-                            border: Border.all(
-                              color: AppColors.headerStart,
-                              width: 2,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 22),
-          _UnitCard(
-            details: details,
-            loading: loading,
-            hasError: hasError,
-            onRetry: onRetry,
-            onTap: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const TenantProfilePage()),
-              );
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _UnitCard extends StatelessWidget {
-  const _UnitCard({
-    required this.details,
-    required this.loading,
-    required this.hasError,
-    required this.onRetry,
-    required this.onTap,
-  });
-
-  final TenantRentalDetails? details;
-  final bool loading;
-  final bool hasError;
-  final VoidCallback onRetry;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final assigned =
-        details?.hasTenancy == true && details?.unitNumber != 'Not assigned';
-    final unitDescription = loading
-        ? 'Loading your assigned unit…'
-        : hasError
-        ? 'Could not load unit details'
-        : assigned
-        ? details!.unitLabel
-        : 'Unit assignment pending';
-
-    return InkWell(
-      onTap: hasError ? onRetry : onTap,
-      borderRadius: BorderRadius.circular(24),
-      child: Container(
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: const Color.fromRGBO(255, 255, 255, 0.17),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: const Color.fromRGBO(255, 255, 255, 0.28)),
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      borderRadius: BorderRadius.vertical(bottom: Radius.circular(34)),
+    ),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
           children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Icon(
-                Icons.home_work_outlined,
-                color: AppColors.primary,
-                size: 23,
-              ),
-            ),
-            const SizedBox(width: 13),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Rental unit',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.2,
-                    ),
+                  const Text(
+                    'Welcome,',
+                    style: TextStyle(color: Color(0xFFDDE4EF), fontSize: 18),
                   ),
-                  SizedBox(height: 5),
+                  const SizedBox(height: 4),
                   Text(
-                    unitDescription,
-                    style: TextStyle(
-                      color: Color.fromRGBO(255, 255, 255, 0.85),
-                      fontSize: 13,
-                    ),
-                  ),
-                  SizedBox(height: 7),
-                  Text(
-                    'View rental details  →',
-                    style: TextStyle(
+                    loading
+                        ? 'Loading your details…'
+                        : details?.fullName.trim().isNotEmpty == true
+                        ? details!.fullName.trim()
+                        : 'Tenant',
+                    style: const TextStyle(
                       color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 27,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            TenantStatusPill(
-              label: loading
-                  ? 'Loading'
-                  : hasError
-                  ? 'Retry'
-                  : assigned
-                  ? 'Occupied'
-                  : 'Not assigned',
-              foregroundColor: assigned
-                  ? AppColors.success
-                  : const Color(0xFFE8953E),
-              backgroundColor: assigned
-                  ? const Color.fromRGBO(225, 255, 237, 0.95)
-                  : const Color.fromRGBO(255, 240, 215, 0.95),
+            const SizedBox(width: 12),
+            const AppLogoutButton(
+              foregroundColor: Colors.white,
+              backgroundColor: Color.fromRGBO(255, 255, 255, 0.18),
             ),
           ],
         ),
-      ),
-    );
-  }
+        const SizedBox(height: 22),
+        Material(
+          color: Colors.white.withValues(alpha: 0.15),
+          borderRadius: BorderRadius.circular(20),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(20),
+            onTap: loading
+                ? null
+                : hasError
+                ? onRetry
+                : () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const TenantProfilePage(),
+                    ),
+                  ),
+            child: Padding(
+              padding: const EdgeInsets.all(17),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.apartment_outlined,
+                    color: Colors.white,
+                    size: 30,
+                  ),
+                  const SizedBox(width: 13),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          loading
+                              ? 'Loading…'
+                              : hasError
+                              ? 'Unable to load tenancy. Tap to retry.'
+                              : details?.hasTenancy == true
+                              ? details!.apartmentName
+                              : 'Unit assignment pending',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 19,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        if (details?.hasTenancy == true &&
+                            !loading &&
+                            !hasError) ...[
+                          const SizedBox(height: 5),
+                          Text(
+                            'Unit ${details!.unitNumber}${details!.rentalType == 'room' ? ' · Room ${details!.roomNumber}' : ' · Whole unit'}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 7),
+                        const Text(
+                          'View rental details',
+                          style: TextStyle(
+                            color: Color(0xFFDDE4EF),
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _OutstandingBillCard extends StatelessWidget {
@@ -392,7 +257,7 @@ class _OutstandingBillCard extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 18),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(

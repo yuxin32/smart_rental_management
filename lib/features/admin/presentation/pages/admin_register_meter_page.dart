@@ -24,8 +24,7 @@ class _AdminRegisterMeterPageState extends State<AdminRegisterMeterPage> {
 
   List<MeterUnitOption> _units = const [];
   String? _selectedUnitId;
-  String _selectedBlock = 'A';
-  int _selectedFloor = 1;
+  String? _selectedBuilding;
   DateTime _installationDate = DateTime.now();
   bool _loadingUnits = true;
   bool _saving = false;
@@ -62,8 +61,7 @@ class _AdminRegisterMeterPageState extends State<AdminRegisterMeterPage> {
         _units = units;
         _selectedUnitId = units.length == 1 ? units.first.unitId : null;
         if (units.length == 1) {
-          _selectedBlock = units.first.blockCode;
-          _selectedFloor = units.first.floorNumber ?? 1;
+          _selectedBuilding = units.first.location;
         }
       });
     } catch (_) {
@@ -430,85 +428,49 @@ class _AdminRegisterMeterPageState extends State<AdminRegisterMeterPage> {
       );
     }
 
-    final unitsOnFloor = _units
-        .where(
-          (unit) =>
-              unit.blockCode == _selectedBlock &&
-              unit.floorNumber == _selectedFloor,
-        )
-        .toList()
-      ..sort((first, second) => first.unitNumber.compareTo(second.unitNumber));
-    final selectedUnitId = unitsOnFloor.any(
-      (unit) => unit.unitId == _selectedUnitId,
-    )
+    final buildings = _units.map((u) => u.location ?? '').toSet().toList()
+      ..sort();
+    final building = buildings.contains(_selectedBuilding)
+        ? _selectedBuilding
+        : null;
+    final buildingUnits = _units
+        .where((u) => (u.location ?? '') == building)
+        .toList();
+    final selectedUnitId = buildingUnits.any((u) => u.unitId == _selectedUnitId)
         ? _selectedUnitId
         : null;
 
     return Column(
       children: [
         DropdownButtonFormField<String>(
-          initialValue: _selectedBlock,
+          initialValue: building,
           isExpanded: true,
           decoration: _inputDecoration(
-            label: '1. Choose block',
+            label: '1. Choose building / apartment',
             icon: Icons.apartment_outlined,
           ),
-          items: const ['A', 'B']
-              .map(
-                (block) => DropdownMenuItem(
-                  value: block,
-                  child: Text('Block $block'),
-                ),
-              )
+          items: buildings
+              .map((name) => DropdownMenuItem(value: name, child: Text(name)))
               .toList(),
-          onChanged: (value) {
-            if (value == null) return;
-            setState(() {
-              _selectedBlock = value;
-              _selectedFloor = 1;
-              _selectedUnitId = null;
-            });
-          },
-        ),
-        const SizedBox(height: 12),
-        DropdownButtonFormField<int>(
-          initialValue: _selectedFloor,
-          isExpanded: true,
-          decoration: _inputDecoration(
-            label: '2. Choose floor',
-            icon: Icons.stairs_outlined,
-          ),
-          items: [
-            for (var floor = 1; floor <= 25; floor++)
-              DropdownMenuItem(
-                value: floor,
-                child: Text('Floor ${floor.toString().padLeft(2, '0')}'),
-              ),
-          ],
-          onChanged: (value) {
-            if (value == null) return;
-            setState(() {
-              _selectedFloor = value;
-              _selectedUnitId = null;
-            });
-          },
+          onChanged: (value) => setState(() {
+            _selectedBuilding = value;
+            _selectedUnitId = null;
+          }),
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
-          key: ValueKey('$_selectedBlock-$_selectedFloor'),
+          key: ValueKey(building),
           initialValue: selectedUnitId,
           isExpanded: true,
           decoration: _inputDecoration(
-            label: '3. Choose unit number',
+            label: '2. Choose unit number',
             icon: Icons.meeting_room_outlined,
           ),
-          items: unitsOnFloor
+          items: buildingUnits
               .map(
                 (unit) => DropdownMenuItem(
                   value: unit.unitId,
-                  child: Text(
-                    '${unit.unitNumber} · ${_statusLabel(unit.status)}',
-                  ),
+                  child: Text(unit.unitNumber),
                 ),
               )
               .toList(),
@@ -686,9 +648,4 @@ String _formatDate(DateTime date) {
     'Dec',
   ];
   return '${date.day} ${months[date.month - 1]} ${date.year}';
-}
-
-String _statusLabel(String status) {
-  if (status.isEmpty) return status;
-  return '${status[0].toUpperCase()}${status.substring(1)}';
 }

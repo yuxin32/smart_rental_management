@@ -17,7 +17,7 @@ void main() {
     await tester.pump();
 
     expect(saved, isFalse);
-    expect(find.text('Apartment unit (e.g. A-12-05) is required'), findsOneWidget);
+    expect(find.text('Unit / apartment number is required'), findsOneWidget);
     expect(find.text('Building or tower is required'), findsOneWidget);
   });
 

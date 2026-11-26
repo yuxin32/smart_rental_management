@@ -11,6 +11,7 @@ class AnnouncementRecord {
     required this.publishedAt,
     required this.expiresAt,
     required this.createdAt,
+    this.readAt,
   });
 
   final String announcementId;
@@ -22,6 +23,21 @@ class AnnouncementRecord {
   final DateTime? publishedAt;
   final DateTime? expiresAt;
   final DateTime createdAt;
+  final DateTime? readAt;
+  bool get isRead => readAt != null;
+
+  AnnouncementRecord withReadAt(DateTime value) => AnnouncementRecord(
+    announcementId: announcementId,
+    title: title,
+    content: content,
+    audienceScope: audienceScope,
+    audienceLabel: audienceLabel,
+    status: status,
+    publishedAt: publishedAt,
+    expiresAt: expiresAt,
+    createdAt: createdAt,
+    readAt: value,
+  );
 
   bool get isPublished => status == 'published';
 
@@ -35,6 +51,12 @@ class AnnouncementRecord {
       status: map['announcement_status'] as String? ?? 'draft',
       publishedAt: _dateFrom(map['published_at']),
       expiresAt: _dateFrom(map['expires_at']),
+      readAt:
+          _dateFrom(map['read_at']) ??
+          ((map['announcement_recipient'] as List?) ?? const [])
+              .map((recipient) => _dateFrom(recipient['read_at']))
+              .whereType<DateTime>()
+              .firstOrNull,
       createdAt:
           _dateFrom(map['created_at']) ??
           DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
@@ -78,11 +100,20 @@ abstract final class AnnouncementService {
 
     final rows = await _client
         .from('announcement')
-        .select(_columns)
+        .select('$_columns, announcement_recipient(tenant_id,read_at)')
         .eq('announcement_status', 'published')
+        .eq('announcement_recipient.tenant_id', currentUserId)
         .gte('published_at', visibleFrom.toUtc().toIso8601String())
         .order('published_at', ascending: false);
     return _recordsFrom(rows);
+  }
+
+  static Future<DateTime> markRead(String announcementId) async {
+    final result = await _client.rpc(
+      'mark_tenant_announcement_read',
+      params: {'p_announcement_id': announcementId},
+    );
+    return DateTime.parse(result as String);
   }
 
   static Future<String> createAnnouncement({

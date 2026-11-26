@@ -37,146 +37,142 @@ class TenantMaintenancePageState extends State<TenantMaintenancePage> {
 
   @override
   Widget build(BuildContext context) {
-    return CustomScrollView(
-      slivers: [
-        const SliverToBoxAdapter(
-          child: TenantScreenTitle(title: 'Maintenance'),
-        ),
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
-          sliver: SliverToBoxAdapter(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'My Requests',
-                        style: TextStyle(
-                          color: AppColors.heading,
-                          fontSize: 20,
-                          fontWeight: FontWeight.w800,
-                        ),
+    return RefreshIndicator(
+      onRefresh: refresh,
+      color: AppColors.primary,
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          const SliverToBoxAdapter(
+            child: TenantScreenTitle(title: 'Maintenance'),
+          ),
+          SliverPadding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 28),
+            sliver: SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'My Requests',
+                    style: TextStyle(
+                      color: AppColors.heading,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 42,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      children: [
+                        for (final filter in const [
+                          'All',
+                          'Submitted',
+                          'In progress',
+                          'Resolved',
+                          'Rejected',
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: ChoiceChip(
+                              label: Text(filter),
+                              selected: _filter == filter,
+                              onSelected: (_) =>
+                                  setState(() => _filter = filter),
+                              selectedColor: const Color(0xFFE0E7FF),
+                              backgroundColor: Colors.white,
+                              side: BorderSide.none,
+                              showCheckmark: false,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TenantCard(
+                    padding: const EdgeInsets.symmetric(vertical: 17),
+                    color: const Color(0xFFFBFCFF),
+                    child: InkWell(
+                      onTap: _newRequest,
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.add_circle_outline_rounded,
+                            color: AppColors.primary,
+                            size: 27,
+                          ),
+                          SizedBox(width: 9),
+                          Text(
+                            'New request',
+                            style: TextStyle(
+                              color: AppColors.primary,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    IconButton(
-                      onPressed: refresh,
-                      icon: const Icon(Icons.refresh_rounded),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                SizedBox(
-                  height: 42,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    children: [
-                      for (final filter in const [
-                        'All',
-                        'Submitted',
-                        'In progress',
-                        'Resolved',
-                        'Rejected',
-                      ])
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: ChoiceChip(
-                            label: Text(filter),
-                            selected: _filter == filter,
-                            onSelected: (_) => setState(() => _filter = filter),
-                            selectedColor: const Color(0xFFE0E7FF),
-                            backgroundColor: Colors.white,
-                            side: BorderSide.none,
-                            showCheckmark: false,
-                          ),
-                        ),
-                    ],
                   ),
-                ),
-                const SizedBox(height: 8),
-                TenantCard(
-                  padding: const EdgeInsets.symmetric(vertical: 17),
-                  color: const Color(0xFFFBFCFF),
-                  child: InkWell(
-                    onTap: _newRequest,
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(
-                          Icons.add_circle_outline_rounded,
-                          color: AppColors.primary,
-                          size: 27,
-                        ),
-                        SizedBox(width: 9),
-                        Text(
-                          'New request',
-                          style: TextStyle(
-                            color: AppColors.primary,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
+                  const SizedBox(height: 18),
+                  FutureBuilder<List<MaintenanceRequestRecord>>(
+                    future: _requests,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState != ConnectionState.done)
+                        return const Padding(
+                          padding: EdgeInsets.all(40),
+                          child: Center(child: CircularProgressIndicator()),
+                        );
+                      if (snapshot.hasError)
+                        return TenantCard(
+                          child: Column(
+                            children: [
+                              const Text('Your requests could not be loaded.'),
+                              TextButton(
+                                onPressed: refresh,
+                                child: const Text('Retry'),
+                              ),
+                            ],
                           ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                FutureBuilder<List<MaintenanceRequestRecord>>(
-                  future: _requests,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState != ConnectionState.done)
-                      return const Padding(
-                        padding: EdgeInsets.all(40),
-                        child: Center(child: CircularProgressIndicator()),
-                      );
-                    if (snapshot.hasError)
-                      return TenantCard(
-                        child: Column(
-                          children: [
-                            const Text('Your requests could not be loaded.'),
-                            TextButton(
-                              onPressed: refresh,
-                              child: const Text('Retry'),
+                        );
+                      final allRequests = snapshot.data ?? const [];
+                      final requests = allRequests.where((request) {
+                        return _filter == 'All' ||
+                            _statusLabel(request.status) == _filter;
+                      }).toList();
+                      if (requests.isEmpty)
+                        return TenantCard(
+                          child: Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(12),
+                              child: Text(
+                                allRequests.isEmpty && _filter == 'All'
+                                    ? 'You have not submitted a maintenance request yet.'
+                                    : 'No requests in this status yet.',
+                                style: const TextStyle(color: AppColors.body),
+                              ),
                             ),
+                          ),
+                        );
+                      return Column(
+                        children: [
+                          for (var i = 0; i < requests.length; i++) ...[
+                            _TenantRequestCard(request: requests[i]),
+                            if (i < requests.length - 1)
+                              const SizedBox(height: 10),
                           ],
-                        ),
-                      );
-                    final allRequests = snapshot.data ?? const [];
-                    final requests = allRequests.where((request) {
-                      return _filter == 'All' ||
-                          _statusLabel(request.status) == _filter;
-                    }).toList();
-                    if (requests.isEmpty)
-                      return TenantCard(
-                        child: Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Text(
-                              allRequests.isEmpty && _filter == 'All'
-                                  ? 'You have not submitted a maintenance request yet.'
-                                  : 'No requests in this status yet.',
-                              style: const TextStyle(color: AppColors.body),
-                            ),
-                          ),
-                        ),
-                      );
-                    return Column(
-                      children: [
-                        for (var i = 0; i < requests.length; i++) ...[
-                          _TenantRequestCard(request: requests[i]),
-                          if (i < requests.length - 1)
-                            const SizedBox(height: 10),
                         ],
-                      ],
-                    );
-                  },
-                ),
-              ],
+                      );
+                    },
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

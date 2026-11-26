@@ -1,5 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
+import nodemailer from "npm:nodemailer@6.10.1";
+import { invitationText } from "./email_content.ts";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -54,6 +57,18 @@ Deno.serve(async (request) => {
   if (administratorError || !administrator) {
     return json({ error: "Only an active administrator can send invitations." }, 403);
   }
+
+  const smtpUser = Deno.env.get("SMTP_USER");
+  const smtpPassword = Deno.env.get("SMTP_PASSWORD");
+  if (!smtpUser || !smtpPassword) {
+    return json({ error: "Invitation email is not configured. Configure the management Gmail sender before inviting tenants." }, 503);
+  }
+  const mailer = nodemailer.createTransport({
+    host: "smtp.gmail.com", port: 465, secure: true,
+    auth: { user: smtpUser, pass: smtpPassword },
+    connectionTimeout: 15000, socketTimeout: 20000,
+    logger: false, debug: false,
+  });
 
   const body = await request.json().catch(() => ({}));
   const registrationId = body.registration_id;
@@ -154,89 +169,25 @@ Deno.serve(async (request) => {
       );
     }
 
-    // Only the unaccepted pending identity is replaced. Accepted and active
-    // accounts are rejected above and are never overwritten by a resend.
-    const { error: pendingTenancyDeleteError } = await serviceClient
-      .from("tenancy")
-      .delete()
-      .eq("tenant_id", registration.auth_user_id)
-      .eq("tenancy_status", "pending");
-
-    if (pendingTenancyDeleteError) {
-      return json({ error: pendingTenancyDeleteError.message }, 400);
-    }
-
-    const { error: deleteUserError } = await serviceClient.auth.admin.deleteUser(
-      registration.auth_user_id,
-    );
-
-    if (deleteUserError) {
-      return json(
-        {
-          error:
-            "The previous pending invitation could not be reset safely. No new invitation was sent.",
-        },
-        409,
-      );
-    }
-
-    const { error: resetRegistrationError } = await serviceClient
-      .from("tenant_registration")
-      .update({
-        auth_user_id: null,
-        registration_status: "draft",
-        invited_at: null,
-        accepted_at: null,
-      })
-      .eq("registration_id", registration.registration_id);
-
-    if (resetRegistrationError) {
-      return json({ error: resetRegistrationError.message }, 400);
-    }
+    // Resending reuses the pending identity and updates its temporary password.
+    // It does not delete the tenant's Auth user or related records.
   } else if (!["draft", "assigned", "expired"].includes(registration.registration_status)) {
     return json({ error: "This tenant registration cannot be invited again." }, 400);
   }
 
-  const inviteOptions = {
-    data: {
-      role: "tenant",
-      registration_id: registration.registration_id,
-    },
-  };
-
-  const { data: invitation, error: invitationError } =
-    await serviceClient.auth.admin.inviteUserByEmail(
-      registration.email,
-      inviteOptions,
-    );
-
-  if (invitationError || !invitation.user) {
-    return json(
-      { error: invitationError?.message ?? "Unable to send the invitation email." },
-      400,
-    );
+  const identity = resend
+    ? await serviceClient.auth.admin.updateUserById(registration.auth_user_id, {
+        password: temporaryPassword, email_confirm: true,
+      })
+    : await serviceClient.auth.admin.createUser({
+        email: registration.email, password: temporaryPassword, email_confirm: true,
+        user_metadata: { role: "tenant", registration_id: registration.registration_id },
+      });
+  if (identity.error || !identity.data.user) {
+    return json({ error: "Unable to configure the tenant login. Check the email address and password requirements." }, 400);
   }
-
-  const invitedUser = invitation.user;
+  const invitedUser = identity.data.user;
   const invitedAt = new Date().toISOString();
-
-  // Demonstration workflow: the Auth identity receives a temporary password
-  // supplied by the administrator. The Flutter app uses invitation_status to
-  // force the tenant to replace it immediately after the first sign-in. The
-  // password is never persisted in an application table or audit record.
-  const { error: temporaryPasswordError } =
-    await serviceClient.auth.admin.updateUserById(invitedUser.id, {
-      password: temporaryPassword,
-      email_confirm: true,
-    });
-
-  if (temporaryPasswordError) {
-    await serviceClient.auth.admin.deleteUser(invitedUser.id);
-    return json(
-      { error: "The temporary tenant login could not be configured." },
-      400,
-    );
-  }
 
   const { error: accountError } = await serviceClient
     .from("user_account")
@@ -255,7 +206,7 @@ Deno.serve(async (request) => {
     );
 
   if (accountError) {
-    await serviceClient.auth.admin.deleteUser(invitedUser.id);
+    if (!resend) await serviceClient.auth.admin.deleteUser(invitedUser.id);
     return json({ error: accountError.message }, 400);
   }
 
@@ -274,7 +225,7 @@ Deno.serve(async (request) => {
   );
 
   if (tenantError) {
-    await serviceClient.auth.admin.deleteUser(invitedUser.id);
+    if (!resend) await serviceClient.auth.admin.deleteUser(invitedUser.id);
     return json({ error: tenantError.message }, 400);
   }
 
@@ -291,6 +242,23 @@ Deno.serve(async (request) => {
     return json({ error: registrationUpdateError.message }, 400);
   }
 
+  try {
+    await mailer.sendMail({
+      from: { name: "Smart Rental Management", address: smtpUser },
+      to: registration.email,
+      subject: "Welcome to Smart Rental Management — Your Tenant Account",
+      text: invitationText(registration.full_name, registration.email, temporaryPassword),
+      disableFileAccess: true, disableUrlAccess: true,
+    });
+  } catch (_) {
+    await serviceClient.from("audit_log").insert({
+      actor_user_id: authData.user.id, action_type: "TENANT_INVITATION_DELIVERY_FAILED",
+      entity_type: "tenant_registration", entity_id: registration.registration_id,
+      outcome: "failure", metadata: { delivery_mode: "gmail_smtp" },
+    });
+    return json({ error: "The tenant account was prepared, but the email could not be delivered. Check the Gmail sender settings, then resend the invitation." }, 502);
+  }
+
   const { error: auditError } = await serviceClient.from("audit_log").insert({
     actor_user_id: authData.user.id,
     action_type: resend
@@ -302,7 +270,7 @@ Deno.serve(async (request) => {
     metadata: {
       email: registration.email,
       invitation_kind: resend ? "resend" : "initial",
-      delivery_mode: "supabase_invite_with_temporary_password",
+      delivery_mode: "gmail_smtp_temporary_password",
     },
   });
 

@@ -13,16 +13,6 @@ class MeterUnitOption {
   final String? location;
   final String status;
 
-  String get blockCode {
-    final parts = unitNumber.split('-');
-    return parts.length == 3 ? parts[0] : '';
-  }
-
-  int? get floorNumber {
-    final parts = unitNumber.split('-');
-    return parts.length == 3 ? int.tryParse(parts[1]) : null;
-  }
-
   String get label {
     if (location == null || location!.trim().isEmpty) return unitNumber;
     return '${location!.trim()} · $unitNumber';

@@ -4,7 +4,7 @@ Flutter application combining Tenant, Administrator, Property Owner and Cleaning
 
 Open this folder (the folder containing `pubspec.yaml`) in Android Studio. Run `lib/main.dart` on an Android emulator.
 
-For the current combined source, use branch **`integration-owner-provider-latest`** rather than `main`. See the [team handoff guide](docs/TEAM_HANDOFF.md) for clone/update commands, Flutter version, Android setup and the separate migration 053 deployment step.
+The current combined source is available on **`integration`** and **`main`**. Continue development from **`integration`**. See the [team handoff guide](docs/TEAM_HANDOFF.md) for clone/update commands, Flutter version, Android setup and the separate migration 053 deployment step.
 
 The app connects to the integrated Supabase project `myetpfavvwuevdcybdes`. Its publishable client key is configured in `lib/core/config/supabase_config.dart`; server secret keys are never included in the app.
 

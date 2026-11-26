@@ -1,3 +1,4 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -754,7 +755,7 @@ class _AdminTenantDetailsPageState extends State<AdminTenantDetailsPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'An invitation email will be sent to ${_record.email}. For this demonstration, give the tenant the temporary password separately. The application will require the tenant to replace it after signing in.',
+                    'An invitation email will be sent to ${_record.email}. The email includes the temporary password you enter below. The application will require the tenant to replace it after signing in.',
                     style: const TextStyle(height: 1.4),
                   ),
                   const SizedBox(height: 16),
@@ -785,7 +786,7 @@ class _AdminTenantDetailsPageState extends State<AdminTenantDetailsPage> {
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    'The temporary password is not included in the email or audit log.',
+                    'The temporary password is included in the invitation email. It is not saved in application records or audit logs.',
                     style: TextStyle(
                       color: AppColors.body,
                       fontSize: 12,
@@ -1162,6 +1163,20 @@ class _AdminTenantDetailsPageState extends State<AdminTenantDetailsPage> {
                   value: _dateRange(_record.startDate, _record.endDate),
                   icon: Icons.date_range_outlined,
                 ),
+                if (_record.hasAssignment) ...[
+                  _DetailLine(
+                    label: 'Rental space',
+                    value: _record.rentalType == 'room'
+                        ? 'Room ${_record.roomNumber}'
+                        : 'Whole unit',
+                    icon: Icons.bed_outlined,
+                  ),
+                  _DetailLine(
+                    label: 'Number of occupants',
+                    value: '${_record.occupantCount}',
+                    icon: Icons.people_outline,
+                  ),
+                ],
                 _DetailLine(
                   label: 'Monthly rental amount',
                   value: _record.monthlyRentalAmount == null
@@ -1307,9 +1322,18 @@ class _AdminTenantDetailsPageState extends State<AdminTenantDetailsPage> {
 }
 
 class AdminAssignTenantPage extends StatefulWidget {
-  const AdminAssignTenantPage({required this.record, super.key});
+  const AdminAssignTenantPage({
+    required this.record,
+    this.loadUnits,
+    super.key,
+  });
 
   final TenantRegistrationRecord record;
+  final Future<List<RegisteredTenancyUnit>> Function(
+    DateTime start,
+    DateTime? end,
+  )?
+  loadUnits;
 
   @override
   State<AdminAssignTenantPage> createState() => _AdminAssignTenantPageState();
@@ -1318,21 +1342,19 @@ class AdminAssignTenantPage extends StatefulWidget {
 class _AdminAssignTenantPageState extends State<AdminAssignTenantPage> {
   final _formKey = GlobalKey<FormState>();
   final _rentController = TextEditingController();
-  final _shareController = TextEditingController(text: '1.00');
-  List<RentalUnitOption> _units = const [];
-  String? _selectedUnitId;
+  List<RegisteredTenancyUnit> _units = const [];
+  String? _selectedBuilding, _selectedUnitId;
+  bool _singleRoom = false;
+  int? _room;
+  int _occupants = 1, _loadVersion = 0;
   DateTime _startDate = DateTime.now();
   DateTime? _endDate;
-  bool _loading = true;
-  bool _saving = false;
-  String? _error;
+  bool _loading = true, _saving = false;
+  String? _loadError, _saveError;
+  static const _red = Color(0xFFB42318);
 
-  RentalUnitOption? get _selectedUnit {
-    for (final unit in _units) {
-      if (unit.unitId == _selectedUnitId) return unit;
-    }
-    return null;
-  }
+  RegisteredTenancyUnit? get _selectedUnit =>
+      _units.where((u) => u.unitId == _selectedUnitId).firstOrNull;
 
   @override
   void initState() {
@@ -1340,93 +1362,158 @@ class _AdminAssignTenantPageState extends State<AdminAssignTenantPage> {
     _selectedUnitId = widget.record.unitId;
     _startDate = widget.record.startDate ?? DateTime.now();
     _endDate = widget.record.endDate;
-    if (widget.record.monthlyRentalAmount != null) {
-      _rentController.text = widget.record.monthlyRentalAmount!.toStringAsFixed(
-        2,
-      );
-    }
-    _shareController.text = widget.record.occupancyShare.toStringAsFixed(2);
+    _singleRoom = widget.record.rentalType == 'room';
+    _room = widget.record.roomNumber;
+    _occupants = widget.record.occupantCount;
+    final rent = widget.record.monthlyRentalAmount;
+    if (rent != null) _rentController.text = rent.toStringAsFixed(2);
     _loadUnits();
   }
 
   @override
   void dispose() {
     _rentController.dispose();
-    _shareController.dispose();
     super.dispose();
   }
 
   Future<void> _loadUnits() async {
+    final version = ++_loadVersion;
+    setState(() {
+      _loading = true;
+      _loadError = null;
+    });
     try {
-      final units = await TenantLifecycleService.fetchAvailableUnits();
-      if (!mounted) return;
+      final units =
+          await (widget.loadUnits?.call(_startDate, _endDate) ??
+              TenantLifecycleService.fetchTenancyUnits(
+                registrationId: widget.record.registrationId,
+                start: _startDate,
+                end: _endDate,
+              ));
+      if (!mounted || version != _loadVersion) return;
       setState(() {
         _units = units;
+        final unit = _selectedUnit;
+        _selectedBuilding = unit?.buildingName ?? _selectedBuilding;
+        if (!units.any((u) => u.buildingName == _selectedBuilding))
+          _selectedBuilding = null;
+        if (unit == null || unit.isFullyOccupied) {
+          if (unit?.isFullyOccupied == true)
+            _saveError =
+                'This unit is now fully occupied for the selected dates. Choose another unit or change the dates.';
+          _selectedUnitId = null;
+          _room = null;
+        } else if (_room != null && _room! > unit.bedrooms) {
+          _room = null;
+          _saveError =
+              'The Owner has updated the bedroom count. Please select an available room again.';
+        }
         _loading = false;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || version != _loadVersion) return;
       setState(() {
         _loading = false;
-        _error = 'Rental units could not be loaded. Check the database setup.';
+        _loadError =
+            'We could not check unit availability. Check your connection and select Retry. Your entries have been kept.';
       });
     }
   }
 
-  Future<void> _selectDate({required bool start}) async {
-    final selected = await showDatePicker(
+  Future<void> _selectDate(bool start) async {
+    if (_saving || _loading) return;
+    final date = await showDatePicker(
       context: context,
-      firstDate: DateTime(2020),
+      firstDate: start ? DateTime(2020) : _startDate,
       lastDate: DateTime(2100),
       initialDate: start ? _startDate : (_endDate ?? _startDate),
     );
-    if (selected == null) return;
+    if (date == null || !mounted) return;
     setState(() {
+      _saveError = null;
       if (start) {
-        _startDate = selected;
+        _startDate = date;
+        if (_endDate?.isBefore(date) == true) _endDate = null;
       } else {
-        _endDate = selected;
+        _endDate = date;
       }
     });
+    await _loadUnits();
   }
 
-  Future<void> _selectUnit() async {
-    final selected = await showModalBottomSheet<RentalUnitOption>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (_) => _RentalUnitPicker(
-        units: _units,
-        selectedUnitId: _selectedUnitId,
-      ),
-    );
-    if (selected != null && mounted) {
-      setState(() => _selectedUnitId = selected.unitId);
+  String? get _availabilityProblem {
+    final unit = _selectedUnit;
+    if (unit == null) return null;
+    if (unit.wholeUnitReserved)
+      return 'This unit is reserved under a whole-unit tenancy for these dates. Choose a different unit or date range.';
+    if (!_singleRoom && unit.total > 0)
+      return 'This unit already has room tenants during these dates. Tick “Rent single room” to choose an available room, or select another unit for whole-unit rental.';
+    if (_singleRoom && _room == null) return null;
+    final remaining = unit.remaining(!_singleRoom, _room);
+    if (remaining == 0)
+      return _singleRoom
+          ? 'Room $_room has no available places for these dates. Select another room or change the dates.'
+          : 'This unit is fully occupied for these dates. Select another unit.';
+    if (_occupants > remaining)
+      return 'Only $remaining place${remaining == 1 ? '' : 's'} remain${remaining == 1 ? 's' : ''} for these dates. Reduce the number of occupants or choose another room.';
+    return null;
+  }
+
+  String _friendlyError(Object error) {
+    if (error is PostgrestException) {
+      final text = error.message.toLowerCase();
+      if (error.code == '42501')
+        return 'Your administrator session is no longer authorised. Sign in again and retry.';
+      if (text.contains('room does not exist'))
+        return 'The selected room is no longer listed for this property. Review the updated bedroom count and choose a room again.';
+      if (text.contains('reserved'))
+        return 'Another tenancy now overlaps this unit for the selected dates. Choose an available room or another unit.';
+      if (text.contains('capacity'))
+        return 'This room or unit no longer has enough space. Availability has been refreshed; reduce the occupants or choose another space.';
+      if (text.contains('account setup'))
+        return 'This tenant has not completed account setup. Ask them to set their password and sign in before assigning a unit.';
+      if (text.contains('registered rental unit'))
+        return 'This property is no longer available for assignment. Select another registered unit.';
+      if (error.code == '23505' ||
+          error.code == '40001' ||
+          error.code == '40P01')
+        return 'The tenancy was updated elsewhere. Review the latest availability and try again.';
+      if (error.code == '22023' || error.code == '23514')
+        return 'Some tenancy details are invalid. Check the dates, rental amount, room and occupant count, then retry.';
     }
+    return 'We could not confirm the assignment. Your entries have been kept. Check the tenant details before retrying to avoid repeating a completed assignment.';
   }
 
   Future<void> _save() async {
-    if (!_formKey.currentState!.validate()) return;
-    if (_selectedUnitId == null) {
-      _showMessage('Select a rental unit.');
+    if (_saving || _loading) return;
+    setState(() => _saveError = null);
+    final valid = _formKey.currentState!.validate();
+    String? problem;
+    if (_loadError != null)
+      problem =
+          'Unit availability could not be checked. Select Retry before saving.';
+    else if (_units.isEmpty)
+      problem =
+          'There are no registered Owner properties to assign. Add a property through the Owner module first.';
+    else if (_selectedBuilding == null)
+      problem = 'Select a building or apartment first.';
+    else if (_selectedUnit == null)
+      problem =
+          'Select an available unit in the chosen building. Grey units are fully occupied for the selected dates.';
+    else if (_singleRoom && _room == null)
+      problem = 'Select a room for this tenancy.';
+    else if (_endDate?.isBefore(_startDate) == true)
+      problem = 'The tenancy end date must be on or after its start date.';
+    else
+      problem = _availabilityProblem;
+    if (problem != null || !valid) {
+      setState(
+        () => _saveError =
+            problem ??
+            'Enter a valid monthly rental amount in the highlighted field.',
+      );
       return;
     }
-    if (_endDate != null && _endDate!.isBefore(_startDate)) {
-      _showMessage('The tenancy end date cannot be before the start date.');
-      return;
-    }
-
-    final rent = double.tryParse(_rentController.text.trim());
-    final share = double.tryParse(_shareController.text.trim());
-    if (rent == null || rent < 0) {
-      _showMessage('Enter a valid monthly rental amount.');
-      return;
-    }
-    if (share == null || share <= 0 || share > 1) {
-      _showMessage('Enter an occupancy share between 0 and 1.');
-      return;
-    }
-
     setState(() => _saving = true);
     try {
       await TenantLifecycleService.saveAssignment(
@@ -1434,439 +1521,480 @@ class _AdminAssignTenantPageState extends State<AdminAssignTenantPage> {
         unitId: _selectedUnitId!,
         startDate: _startDate,
         endDate: _endDate,
-        monthlyRentalAmount: rent,
-        occupancyShare: share,
+        monthlyRentalAmount: double.parse(_rentController.text.trim()),
+        rentalType: _singleRoom ? 'room' : 'whole_unit',
+        roomNumber: _singleRoom ? _room : null,
+        occupantCount: _occupants,
       );
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Rental unit assignment saved.')),
+        const SnackBar(
+          backgroundColor: Color(0xFF16794C),
+          content: Text(
+            'Tenancy assigned successfully. Tenant details have been updated.',
+          ),
+        ),
       );
       Navigator.of(context).pop(true);
-    } catch (_) {
-      if (mounted) _showMessage('Unable to save the rental assignment.');
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _saveError = _friendlyError(error));
+      await _loadUnits();
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text(message)));
-  }
+  Widget _notice(String text, {bool error = false}) => Container(
+    width: double.infinity,
+    padding: const EdgeInsets.all(14),
+    decoration: BoxDecoration(
+      color: error ? const Color(0xFFFFF1F0) : const Color(0xFFEEF4FF),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(
+        color: error ? const Color(0xFFF5B7B1) : const Color(0xFFD1DFFC),
+      ),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(
+          error ? Icons.error_outline : Icons.info_outline,
+          color: error ? _red : AppColors.primary,
+          size: 20,
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: TextStyle(
+              color: error ? _red : AppColors.heading,
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _section(
+    String number,
+    String title,
+    IconData icon,
+    List<Widget> children,
+  ) => Padding(
+    padding: const EdgeInsets.only(bottom: 16),
+    child: AdminCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2F8),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: AppColors.primary, size: 21),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  '$number. $title',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 16,
+                    color: AppColors.heading,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          ...children,
+        ],
+      ),
+    ),
+  );
+
+  InputDecoration _input(String label) => InputDecoration(
+    labelText: label,
+    filled: true,
+    fillColor: const Color(0xFFF8FAFC),
+    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+    errorStyle: const TextStyle(color: _red),
+    errorMaxLines: 3,
+  );
+
+  Widget _dateTile(
+    String label,
+    String value,
+    VoidCallback action, {
+    Widget? trailing,
+  }) => OutlinedButton(
+    onPressed: _saving || _loading ? null : action,
+    style: OutlinedButton.styleFrom(
+      padding: const EdgeInsets.all(14),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ),
+    child: Row(
+      children: [
+        const Icon(Icons.calendar_today_outlined, size: 18),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: const TextStyle(fontSize: 11, color: AppColors.body),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: AppColors.heading,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (trailing != null) trailing,
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
+    final unit = _selectedUnit;
+    final locked = _saving || _loading;
+    final buildings = _units.map((u) => u.buildingName).toSet().toList()
+      ..sort();
     return Scaffold(
       backgroundColor: const Color(0xFFF6F8FB),
-      appBar: const AdminBackAppBar(title: 'Assign Rental Unit'),
+      appBar: const AdminBackAppBar(title: 'Assign tenancy'),
       body: Form(
         key: _formKey,
         child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
+          padding: const EdgeInsets.fromLTRB(20, 10, 20, 32),
           children: [
             Text(
-              'Step 2 · ${widget.record.fullName}',
+              widget.record.fullName,
               style: const TextStyle(
-                color: AppColors.heading,
-                fontSize: 21,
+                fontSize: 23,
                 fontWeight: FontWeight.w800,
+                color: AppColors.heading,
               ),
             ),
             const SizedBox(height: 6),
             const Text(
-              'Search and assign the rental unit separately from tenant information entry.',
-              style: TextStyle(
-                color: AppColors.body,
-                fontSize: 13,
-                height: 1.4,
-              ),
+              'Choose the tenancy dates and rental space. Availability is checked for the entire selected period.',
+              style: TextStyle(color: AppColors.body, height: 1.45),
             ),
-            const SizedBox(height: 18),
-            if (_error != null)
-              AdminCard(
-                color: const Color(0xFFFFF5E8),
-                child: Text(
-                  _error!,
-                  style: const TextStyle(color: AppColors.body, height: 1.4),
-                ),
-              )
-            else
-              AdminCard(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Rental unit',
-                      style: TextStyle(
-                        color: AppColors.heading,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    if (_loading)
-                      const LinearProgressIndicator()
-                    else if (_units.isEmpty)
-                      const Text(
-                        'No rental units are available for assignment.',
-                        style: TextStyle(color: AppColors.body, fontSize: 13),
-                      )
-                    else
-                      SizedBox(
-                        width: double.infinity,
-                        child: OutlinedButton.icon(
-                          onPressed: _selectUnit,
-                          icon: const Icon(Icons.search_rounded),
-                          label: Text(
-                            _selectedUnit?.label ?? 'Search and select a unit',
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          style: OutlinedButton.styleFrom(
-                            alignment: Alignment.centerLeft,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 14,
-                              vertical: 15,
-                            ),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                          ),
-                        ),
-                      ),
-                    if (!_loading && _selectedUnit != null) ...[
-                      const SizedBox(height: 6),
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: Text(
-                          'Unit status: ${_selectedUnit!.status}',
-                          style: const TextStyle(
-                            color: AppColors.body,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 18),
-                    const Text(
-                      'Tenancy start date',
-                      style: TextStyle(
-                        color: AppColors.heading,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _dateButton(
-                      icon: Icons.calendar_today_outlined,
-                      label: _formatDate(_startDate),
-                      onPressed: () => _selectDate(start: true),
-                    ),
-                    const SizedBox(height: 15),
-                    const Text(
-                      'Tenancy end date',
-                      style: TextStyle(
-                        color: AppColors.heading,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    _dateButton(
-                      icon: Icons.event_available_outlined,
-                      label: _endDate == null
-                          ? 'No end date'
-                          : _formatDate(_endDate!),
-                      onPressed: () => _selectDate(start: false),
-                      trailing: _endDate == null
-                          ? null
-                          : IconButton(
-                              onPressed: () => setState(() => _endDate = null),
-                              icon: const Icon(Icons.close_rounded),
-                            ),
-                    ),
-                    const SizedBox(height: 15),
-                    TextFormField(
-                      controller: _rentController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      validator: (value) => _required(value, 'monthly rent'),
-                      decoration: _fieldDecoration(
-                        Icons.payments_outlined,
-                        'Monthly rental amount (RM)',
-                      ),
-                    ),
-                    const SizedBox(height: 15),
-                    TextFormField(
-                      controller: _shareController,
-                      keyboardType: const TextInputType.numberWithOptions(
-                        decimal: true,
-                      ),
-                      decoration: _fieldDecoration(
-                        Icons.pie_chart_outline_rounded,
-                        'Occupancy share (0–1)',
-                      ),
-                    ),
-                  ],
-                ),
+            const SizedBox(height: 20),
+            _section('1', 'Tenancy period', Icons.date_range_outlined, [
+              _dateTile(
+                'Start date',
+                _formatDate(_startDate),
+                () => _selectDate(true),
               ),
-            const SizedBox(height: 16),
-            AdminCard(
-              color: const Color(0xFFF0F5FF),
-              child: const Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.info_outline_rounded, color: AppColors.primary),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      'Saving this page records the unit mapping and rental details. The tenant will then be able to use functions linked to the assigned unit.',
-                      style: TextStyle(
-                        color: Color(0xFF5D75B4),
-                        fontSize: 12,
-                        height: 1.45,
+              const SizedBox(height: 10),
+              _dateTile(
+                'End date',
+                _endDate == null ? 'No end date' : _formatDate(_endDate!),
+                () => _selectDate(false),
+                trailing: _endDate == null
+                    ? null
+                    : IconButton(
+                        tooltip: 'Remove end date',
+                        icon: const Icon(Icons.close, size: 18),
+                        onPressed: locked
+                            ? null
+                            : () async {
+                                setState(() {
+                                  _endDate = null;
+                                  _saveError = null;
+                                });
+                                await _loadUnits();
+                              },
+                      ),
+              ),
+            ]),
+            _section('2', 'Building & unit', Icons.apartment_outlined, [
+              if (_loading)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 14),
+                  child: LinearProgressIndicator(),
+                ),
+              if (_loadError != null) ...[
+                _notice(_loadError!, error: true),
+                TextButton.icon(
+                  onPressed: locked ? null : _loadUnits,
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Retry availability'),
+                ),
+              ] else if (!_loading && _units.isEmpty)
+                _notice(
+                  'No Owner properties are registered. Add a property in the Owner module before assigning a tenancy.',
+                  error: true,
+                ),
+              DropdownButtonFormField<String>(
+                key: ValueKey('building-$_selectedBuilding'),
+                initialValue: _selectedBuilding,
+                decoration: _input('Building / apartment'),
+                isExpanded: true,
+                items: buildings
+                    .map(
+                      (name) => DropdownMenuItem(
+                        value: name,
+                        child: Text(name, overflow: TextOverflow.ellipsis),
+                      ),
+                    )
+                    .toList(),
+                onChanged: locked
+                    ? null
+                    : (value) => setState(() {
+                        _selectedBuilding = value;
+                        _selectedUnitId = null;
+                        _room = null;
+                        _occupants = 1;
+                        _saveError = null;
+                      }),
+                validator: (value) =>
+                    value == null ? 'Select a building / apartment.' : null,
+              ),
+              const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                key: ValueKey('unit-$_selectedBuilding-$_selectedUnitId'),
+                initialValue: _selectedUnitId,
+                decoration: _input('Unit number'),
+                isExpanded: true,
+                items: _units
+                    .where((u) => u.buildingName == _selectedBuilding)
+                    .map(
+                      (u) => DropdownMenuItem(
+                        value: u.unitId,
+                        enabled: !u.isFullyOccupied,
+                        child: Text(
+                          u.isFullyOccupied
+                              ? '${u.unitNumber} · Fully occupied'
+                              : u.unitNumber,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: u.isFullyOccupied
+                                ? Colors.grey
+                                : AppColors.heading,
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
+                onChanged: locked || _selectedBuilding == null
+                    ? null
+                    : (value) => setState(() {
+                        _selectedUnitId = value;
+                        _room = null;
+                        _occupants = 1;
+                        _saveError = null;
+                      }),
+                validator: (value) =>
+                    value == null ? 'Select an available unit.' : null,
+              ),
+              if (unit != null) ...[
+                const SizedBox(height: 14),
+                _notice(
+                  '${unit.bedrooms} bedroom${unit.bedrooms == 1 ? '' : 's'} registered by the Owner. Grey units and rooms are unavailable for the selected dates.',
+                ),
+              ],
+            ]),
+            if (unit != null)
+              _section(
+                '3',
+                'Rental space',
+                _singleRoom ? Icons.bed_outlined : Icons.home_outlined,
+                [
+                  Container(
+                    decoration: BoxDecoration(
+                      color: _singleRoom
+                          ? const Color(0xFFEAF7F4)
+                          : const Color(0xFFEEF2F8),
+                      border: Border.all(
+                        color: _singleRoom
+                            ? const Color(0xFF75BFAF)
+                            : const Color(0xFFC8D3E2),
+                      ),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      borderRadius: BorderRadius.circular(14),
+                      child: CheckboxListTile(
+                        value: _singleRoom,
+                        activeColor: const Color(0xFF197C68),
+                        title: const Text(
+                          'Rent single room',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        subtitle: Text(
+                          _singleRoom
+                              ? 'Select one room. Maximum 2 occupants in that room.'
+                              : 'Unchecked: rent the entire unit for this household. Maximum 8 occupants.',
+                        ),
+                        onChanged: locked
+                            ? null
+                            : (value) => setState(() {
+                                _singleRoom = value!;
+                                _room = null;
+                                _occupants = 1;
+                                _saveError = null;
+                              }),
                       ),
                     ),
                   ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Icon(
+                        _singleRoom ? Icons.bed_outlined : Icons.home_outlined,
+                        color: AppColors.primary,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _singleRoom
+                            ? 'Single-room tenancy'
+                            : 'Whole-unit tenancy',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.heading,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  if (_singleRoom) ...[
+                    DropdownButtonFormField<int>(
+                      key: ValueKey('room-$_selectedUnitId-$_room'),
+                      initialValue: _room,
+                      decoration: _input('Select room'),
+                      isExpanded: true,
+                      items: List.generate(unit.bedrooms, (i) {
+                        final full = unit.remaining(false, i + 1) == 0;
+                        return DropdownMenuItem(
+                          value: i + 1,
+                          enabled: !full,
+                          child: Text(
+                            'Room ${i + 1} · ${full ? 'Full' : '${unit.roomOccupants[i]}/2 occupied'}',
+                            style: TextStyle(
+                              color: full ? Colors.grey : AppColors.heading,
+                            ),
+                          ),
+                        );
+                      }),
+                      onChanged: locked
+                          ? null
+                          : (value) => setState(() {
+                              _room = value;
+                              _occupants = 1;
+                              _saveError = null;
+                            }),
+                      validator: (value) => _singleRoom && value == null
+                          ? 'Select an available room.'
+                          : null,
+                    ),
+                    const SizedBox(height: 14),
+                  ],
+                  DropdownButtonFormField<int>(
+                    key: ValueKey('occupants-$_singleRoom-$_occupants'),
+                    initialValue: _occupants,
+                    decoration: _input('Number of occupants'),
+                    items: List.generate(
+                      _singleRoom ? 2 : 8,
+                      (i) => DropdownMenuItem(
+                        value: i + 1,
+                        child: Text('${i + 1} ${i == 0 ? 'person' : 'people'}'),
+                      ),
+                    ),
+                    onChanged: locked
+                        ? null
+                        : (value) => setState(() {
+                            _occupants = value!;
+                            _saveError = null;
+                          }),
+                  ),
+                  const SizedBox(height: 14),
+                  if (_availabilityProblem != null)
+                    _notice(_availabilityProblem!, error: true)
+                  else
+                    _notice(
+                      _singleRoom && _room == null
+                          ? 'Choose a room to see its availability.'
+                          : '${unit.remaining(!_singleRoom, _room)} place(s) available in this rental space. The unit limit remains 8 occupants in total.',
+                    ),
                 ],
               ),
+            _section(
+              unit == null ? '3' : '4',
+              'Monthly rent',
+              Icons.payments_outlined,
+              [
+                TextFormField(
+                  controller: _rentController,
+                  enabled: !_saving,
+                  autovalidateMode: AutovalidateMode.onUserInteraction,
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
+                  decoration: _input('Monthly rental amount (RM)'),
+                  validator: (value) {
+                    final amount = double.tryParse(value?.trim() ?? '');
+                    if (amount == null || !amount.isFinite || amount < 0)
+                      return 'Enter a rental amount of RM 0.00 or above.';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Enter the monthly amount for this tenancy: the selected room or the entire unit.',
+                  style: TextStyle(fontSize: 12, color: AppColors.body),
+                ),
+              ],
             ),
-            const SizedBox(height: 20),
+            if (_saveError != null) ...[
+              _notice(_saveError!, error: true),
+              const SizedBox(height: 16),
+            ],
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _saving || _loading || _units.isEmpty ? null : _save,
-                icon: const Icon(Icons.save_outlined),
-                label: Text(_saving ? 'Saving...' : 'Save rental assignment'),
+                onPressed: locked ? null : _save,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,
-                  elevation: 0,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  padding: const EdgeInsets.symmetric(vertical: 17),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(14),
                   ),
                 ),
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(Icons.check_circle_outline),
+                label: Text(
+                  _saving ? 'Saving assignment…' : 'Save tenancy assignment',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _dateButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onPressed,
-    Widget? trailing,
-  }) {
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8F9FC),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE1E5ED)),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextButton.icon(
-              onPressed: onPressed,
-              icon: Icon(icon, color: AppColors.primary),
-              label: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  label,
-                  style: const TextStyle(color: AppColors.heading),
-                ),
-              ),
-            ),
-          ),
-          ?trailing,
-        ],
-      ),
-    );
-  }
-
-  static String? _required(String? value, String label) {
-    if (value == null || value.trim().isEmpty) return 'Enter the $label.';
-    return null;
-  }
-}
-
-class _RentalUnitPicker extends StatefulWidget {
-  const _RentalUnitPicker({
-    required this.units,
-    required this.selectedUnitId,
-  });
-
-  final List<RentalUnitOption> units;
-  final String? selectedUnitId;
-
-  @override
-  State<_RentalUnitPicker> createState() => _RentalUnitPickerState();
-}
-
-class _RentalUnitPickerState extends State<_RentalUnitPicker> {
-  late String _block;
-  late int _floor;
-
-  @override
-  void initState() {
-    super.initState();
-    RentalUnitOption? selected;
-    for (final unit in widget.units) {
-      if (unit.unitId == widget.selectedUnitId) {
-        selected = unit;
-        break;
-      }
-    }
-    _block = selected?.blockCode == 'B' ? 'B' : 'A';
-    _floor = selected?.floorNumber ?? 1;
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final unitsOnFloor = widget.units
-        .where(
-          (unit) => unit.blockCode == _block && unit.floorNumber == _floor,
-        )
-        .toList()
-      ..sort((first, second) => first.unitNumber.compareTo(second.unitNumber));
-
-    return SafeArea(
-      child: Padding(
-        padding: EdgeInsets.fromLTRB(
-          20,
-          4,
-          20,
-          16 + MediaQuery.viewInsetsOf(context).bottom,
-        ),
-        child: SizedBox(
-          height: MediaQuery.sizeOf(context).height * 0.62,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Select a rental unit',
-                style: TextStyle(
-                  color: AppColors.heading,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              const SizedBox(height: 16),
-              const Text(
-                '1. Choose block',
-                style: TextStyle(
-                  color: AppColors.body,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  for (final block in ['A', 'B']) ...[
-                    Expanded(
-                      child: ChoiceChip(
-                        label: Text('Block $block'),
-                        selected: _block == block,
-                        onSelected: (_) => setState(() {
-                          _block = block;
-                          _floor = 1;
-                        }),
-                        showCheckmark: false,
-                      ),
-                    ),
-                    if (block == 'A') const SizedBox(width: 10),
-                  ],
-                ],
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                initialValue: _floor,
-                decoration: const InputDecoration(labelText: '2. Choose floor'),
-                items: [
-                  for (var floor = 1; floor <= 25; floor++)
-                    DropdownMenuItem(
-                      value: floor,
-                      child: Text('Floor ${floor.toString().padLeft(2, '0')}'),
-                    ),
-                ],
-                onChanged: (value) {
-                  if (value != null) setState(() => _floor = value);
-                },
-              ),
-              const SizedBox(height: 12),
-              Text(
-                '3. Choose unit · Block $_block, Floor ${_floor.toString().padLeft(2, '0')}',
-                style: const TextStyle(
-                  color: AppColors.body,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Expanded(
-                child: unitsOnFloor.isEmpty
-                    ? const Center(
-                        child: Text('No units are available on this floor.'),
-                      )
-                    : GridView.builder(
-                        itemCount: unitsOnFloor.length,
-                        gridDelegate:
-                            const SliverGridDelegateWithFixedCrossAxisCount(
-                              crossAxisCount: 2,
-                              mainAxisSpacing: 8,
-                              crossAxisSpacing: 8,
-                              childAspectRatio: 2.3,
-                            ),
-                        itemBuilder: (context, index) {
-                          final unit = unitsOnFloor[index];
-                          final selected = unit.unitId == widget.selectedUnitId;
-                          return OutlinedButton(
-                            onPressed: () => Navigator.of(context).pop(unit),
-                            style: OutlinedButton.styleFrom(
-                              backgroundColor: selected
-                                  ? const Color(0xFFEAF0FF)
-                                  : Colors.white,
-                              side: BorderSide(
-                                color: selected
-                                    ? AppColors.primary
-                                    : const Color(0xFFE1E5ED),
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(13),
-                              ),
-                            ),
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Text(
-                                  unit.unitNumber,
-                                  style: const TextStyle(
-                                    color: AppColors.heading,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                                Text(
-                                  unit.status,
-                                  style: const TextStyle(
-                                    color: AppColors.body,
-                                    fontSize: 10,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
         ),
       ),
     );
