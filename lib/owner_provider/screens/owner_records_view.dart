@@ -98,126 +98,19 @@ class _OwnerRecordsViewState extends State<OwnerRecordsView>
         key: ValueKey(
             'owner-${widget.providers ? 'providers' : 'bookings'}-records'),
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(widget.providers ? 20 : 16),
         children: [
-          Text(
-              widget.providers
-                  ? 'Browse cleaning providers'
-                  : 'All your bookings',
-              style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800,
-                  color: colors.textPrimary)),
-          const SizedBox(height: 6),
-          Text(
-              widget.providers
-                  ? 'Compare services, areas and rates. Availability is checked when you request cleaning from Home.'
-                  : 'Search every booking, follow current requests or review your history.',
-              style: TextStyle(color: colors.textSecondary, height: 1.5)),
-          const SizedBox(height: 18),
-          TextField(
-            key: const Key('owner-record-search'),
-            controller: search,
-            maxLength: 80,
-            textInputAction: TextInputAction.search,
-            decoration: InputDecoration(
-              errorText: inputError,
-              errorMaxLines: 3,
-              labelText: widget.providers
-                  ? 'Search name, area or service'
-                  : 'Search unit, building or service',
-              prefixIcon: const Icon(Icons.search),
-              counterText: '',
-              suffixIcon: search.text.isEmpty
-                  ? null
-                  : IconButton(
-                      tooltip: 'Clear search',
-                      icon: const Icon(Icons.close),
-                      onPressed: () {
-                        search.clear();
-                        _apply();
-                      }),
-            ),
-            onChanged: (_) {
-              debounce?.cancel();
-              setState(() {});
-              debounce = Timer(const Duration(milliseconds: 350), _apply);
-            },
-            onSubmitted: (_) {
-              FocusScope.of(context).unfocus();
-              _apply();
-            },
-          ),
-          if (!widget.providers) ...[
-            const SizedBox(height: 14),
-            SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                for (final entry in const {
-                  'all': 'All',
-                  'pending': 'Pending',
-                  'ongoing': 'Ongoing',
-                  'history': 'History',
-                }.entries)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: Text(entry.value),
-                      selected: statusTab == entry.key,
-                      onSelected: (_) {
-                        statusTab = entry.key;
-                        historyGroup = 'history';
-                        group = statusTab;
-                        _apply();
-                      },
-                    ),
-                  ),
-              ]),
-            ),
-            const SizedBox(height: 14),
-            DropdownButtonFormField<String>(
-              key: const Key('owner-booking-group'),
-              value: historyGroup,
-              isExpanded: true,
-              decoration: InputDecoration(
-                labelText: 'History filter',
-                helperText: statusTab == 'history'
-                    ? 'Filter finished requests.'
-                    : 'Select History above to use this filter.',
-                helperMaxLines: 2,
-              ),
-              items: const {
-                'history': 'All history',
-                'completed': 'Completed',
-                'cancelled': 'Cancelled',
-                'declined': 'Declined',
-              }
-                  .entries
-                  .map((e) =>
-                      DropdownMenuItem(value: e.key, child: Text(e.value)))
-                  .toList(),
-              onChanged: statusTab != 'history'
-                  ? null
-                  : (value) {
-                      if (value != null) {
-                        historyGroup = value;
-                        group = value;
-                        _apply();
-                      }
-                    },
-            ),
-            const SizedBox(height: 10),
-            Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  icon: const Icon(Icons.sort),
-                  label: Text(oldest ? 'Oldest first' : 'Newest first'),
-                  onPressed: () {
-                    oldest = !oldest;
-                    _apply();
-                  },
-                )),
-          ],
+          if (widget.providers) ...[
+            Text('Browse cleaning providers',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800,
+                    color: colors.textPrimary)),
+            const SizedBox(height: 6),
+            Text('Compare services, areas and rates. Availability is checked when you request cleaning from Home.',
+                style: TextStyle(color: colors.textSecondary, height: 1.5)),
+            const SizedBox(height: 18),
+            _searchField(),
+          ] else
+            _bookingControls(rows.length),
           const SizedBox(height: 16),
           if (feed.loading && !feed.hasSnapshot)
             const LinearProgressIndicator(),
@@ -265,7 +158,7 @@ class _OwnerRecordsViewState extends State<OwnerRecordsView>
                       widget.onBooking?.call(row['booking_id'] as String)),
             const SizedBox(height: 12),
           ],
-          if (rows.isNotEmpty)
+          if (widget.providers && rows.isNotEmpty)
             Text(
                 '${rows.length} ${rows.length == 1 ? (widget.providers ? 'provider' : 'booking') : label} shown',
                 style: TextStyle(color: colors.textSecondary)),
@@ -285,6 +178,202 @@ class _OwnerRecordsViewState extends State<OwnerRecordsView>
         ],
       ),
     );
+  }
+
+  Widget _searchField({bool compact = false}) => TextField(
+        key: const Key('owner-record-search'),
+        controller: search,
+        maxLength: 80,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          errorText: inputError,
+          errorMaxLines: 3,
+          labelText: compact ? null : 'Search name, area or service',
+          hintText: compact ? 'Search bookings' : null,
+          isDense: compact,
+          contentPadding: compact
+              ? const EdgeInsets.symmetric(horizontal: 12, vertical: 14)
+              : null,
+          prefixIcon: const Icon(Icons.search),
+          counterText: '',
+          suffixIcon: search.text.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Clear search',
+                  icon: const Icon(Icons.close),
+                  onPressed: () {
+                    search.clear();
+                    _apply();
+                  }),
+        ),
+        onChanged: (_) {
+          debounce?.cancel();
+          setState(() {});
+          debounce = Timer(const Duration(milliseconds: 350), _apply);
+        },
+        onSubmitted: (_) {
+          FocusScope.of(context).unfocus();
+          _apply();
+        },
+      );
+
+  Widget _sortMenu() {
+    final scheme = Theme.of(context).colorScheme;
+    return Semantics(
+      button: true,
+      label: 'Sort bookings. ${oldest ? 'Oldest first' : 'Newest first'}',
+      child: PopupMenuButton<bool>(
+        key: const Key('owner-booking-sort'),
+        tooltip: 'Sort bookings',
+        initialValue: oldest,
+        onSelected: (value) {
+          if (oldest == value) return;
+          oldest = value;
+          _apply();
+        },
+        itemBuilder: (_) => [
+          CheckedPopupMenuItem(
+            value: false,
+            checked: !oldest,
+            child: const Text('Newest first'),
+          ),
+          CheckedPopupMenuItem(
+            value: true,
+            checked: oldest,
+            child: const Text('Oldest first'),
+          ),
+        ],
+        child: Container(
+          constraints: const BoxConstraints(minHeight: 48),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+          decoration: BoxDecoration(
+            color: oldest ? scheme.primaryContainer : scheme.surface,
+            border: Border.all(color: oldest ? scheme.primary : scheme.outlineVariant),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.sort, size: 18, color: scheme.primary),
+            const SizedBox(width: 6),
+            Text('Sort', style: TextStyle(color: scheme.primary)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _bookingControls(int count) {
+    final theme = Theme.of(context);
+    final scale = MediaQuery.textScalerOf(context);
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      LayoutBuilder(builder: (context, constraints) {
+        if (constraints.maxWidth < scale.scale(14) * 10 + scale.scale(14) * 5 + 24) {
+          return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            _searchField(compact: true),
+            const SizedBox(height: 8),
+            Align(alignment: Alignment.centerRight, child: _sortMenu()),
+          ]);
+        }
+        return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Expanded(child: _searchField(compact: true)),
+          const SizedBox(width: 8),
+          _sortMenu(),
+        ]);
+      }),
+      const SizedBox(height: 10),
+      LayoutBuilder(builder: (context, constraints) {
+        final minWidth = scale.scale(13) * 4 + 16;
+        final columns = constraints.maxWidth >= minWidth * 4 + 12 ? 4 : 2;
+        final width = (constraints.maxWidth - (columns - 1) * 4) / columns;
+        return Wrap(spacing: 4, runSpacing: 4, children: [
+          for (final entry in const {
+            'all': 'All',
+            'pending': 'Pending',
+            'ongoing': 'Ongoing',
+            'history': 'History',
+          }.entries)
+            SizedBox(
+              width: width,
+              child: TextButton(
+                key: ValueKey('owner-booking-tab-${entry.key}'),
+                style: TextButton.styleFrom(
+                  minimumSize: const Size(0, 44),
+                  padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 10),
+                  textStyle: theme.textTheme.labelLarge?.copyWith(fontSize: 13),
+                  backgroundColor: statusTab == entry.key ? theme.colorScheme.primary : null,
+                  foregroundColor: statusTab == entry.key
+                      ? theme.colorScheme.onPrimary
+                      : SemanticColors.of(context).textSecondary,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  if (statusTab == entry.key) return;
+                  statusTab = entry.key;
+                  historyGroup = 'history';
+                  group = statusTab;
+                  _apply();
+                },
+                child: Semantics(selected: statusTab == entry.key, child: Text(entry.value)),
+              ),
+            ),
+        ]);
+      }),
+      const SizedBox(height: 8),
+      LayoutBuilder(builder: (context, constraints) {
+        final pickerWidth = (154 * scale.scale(12) / 12)
+            .clamp(0.0, constraints.maxWidth).toDouble();
+        final summaryLabel = feed.loading && !feed.hasSnapshot
+            ? 'Checking bookings'
+            : feed.error != null && !feed.hasSnapshot
+                ? 'Bookings unavailable'
+                : '$count ${count == 1 ? 'booking' : 'bookings'} shown';
+        final summary = Text(
+          '$summaryLabel · ${oldest ? 'Oldest' : 'Newest'}',
+          style: theme.textTheme.bodySmall,
+        );
+        final picker = SizedBox(
+          width: pickerWidth,
+          child: Semantics(
+            label: 'History filter',
+            child: InputDecorator(
+              decoration: InputDecoration(
+                enabled: statusTab == 'history',
+                isDense: true,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+              ),
+              child: DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  key: const Key('owner-booking-group'),
+                  value: historyGroup,
+                  isExpanded: true,
+                  isDense: false,
+                  style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurface),
+                  items: const {
+                    'history': 'All history',
+                    'completed': 'Completed',
+                    'cancelled': 'Cancelled',
+                    'declined': 'Declined',
+                  }.entries.map((e) => DropdownMenuItem(value: e.key, child: Text(e.value))).toList(),
+                  onChanged: statusTab != 'history' ? null : (value) {
+                    if (value == null || value == historyGroup) return;
+                    historyGroup = value;
+                    group = value;
+                    _apply();
+                  },
+                ),
+              ),
+            ),
+          ),
+        );
+        if (pickerWidth + scale.scale(12) * 7 + 12 > constraints.maxWidth) {
+          return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            summary,
+            const SizedBox(height: 8),
+            Align(alignment: Alignment.centerRight, child: picker),
+          ]);
+        }
+        return Row(children: [Expanded(child: summary), const SizedBox(width: 12), picker]);
+      }),
+    ]);
   }
 
   Widget _retry(String text, VoidCallback retry) => Padding(
